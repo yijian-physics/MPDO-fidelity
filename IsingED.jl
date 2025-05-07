@@ -73,12 +73,15 @@ function dephasing_X(p::Float64)
     return T
 end
 
-function Ising_GS_DMRG(N,h=1.0,max_bd=100,nsweeps = 20)
+function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=100,nsweeps = 20)
     sites = siteinds("S=1/2",N)
 
     os = OpSum()
-    for j in 1:N
-        os += -4.0,"Sx",j,"Sx",j%N+1
+    for j in 1:N-1
+        os += -4.0,"Sx",j,"Sx",j+1
+    end
+    if (pbc)
+        os += -4.0,"Sx",N,"Sx",1
     end
     for j in 1:N
         os += -2.0*h,"Sz",j

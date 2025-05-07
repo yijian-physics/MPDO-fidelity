@@ -11,6 +11,7 @@ testnan(M::myMPS) = sum([sum(isnan.(ten)) for ten in M.TensorList])
 testnorm(M::myMPS) = findmin([norm(ten) for ten in M.TensorList])[1]
 max_bond_dim(M::myMPS) = findmax([size(ten,1) for ten in M.TensorList])[1]
 Base.copy(M::myMPS) = myMPS(copy(M.TensorList))
+Base.complex(M::myMPS) = myMPS(complex.(M.TensorList))
 
 struct myMPDO{T<:Number}
     TensorList::Array{Array{T,4},1} #List of myMPDO tensors that represent the purification 
@@ -24,6 +25,7 @@ testnan(M::myMPDO) = sum([sum(isnan.(ten)) for ten in M.TensorList])
 testnorm(M::myMPDO) = findmin([norm(ten) for ten in M.TensorList])[1]
 max_bond_dim(M::myMPDO) = findmax([size(ten,1) for ten in M.TensorList])[1]
 Base.copy(M::myMPDO) = myMPDO(copy(M.TensorList))
+Base.complex(M::myMPDO) = myMPDO(complex.(M.TensorList))
 
 function product_state_init(T::Type, d::Int, N::Int) 
     ## Initialize a product state |000000>
@@ -38,7 +40,7 @@ function product_state_init(T::Type, d::Int, N::Int)
     return myMPDO(myMPSTensors)
 end
 
-function truncate(S::Vector{<:Real}, max_bd::Int, max_err::Float64)
+function mytruncate(S::Vector{<:Real}, max_bd::Int, max_err::Float64)
     ## Given an array S (descending), determine the truncation 
     ## based on which of max bond dimesion or max err is reached
     err = 0.0
@@ -74,7 +76,7 @@ function canonicalize_left_one_site(M::myMPDO, site::Int;truncation = false, max
     end
     S = S./norm(S)
     if(truncation == true)
-        set_bd = truncate(S,max_bd,max_err)
+        set_bd = mytruncate(S,max_bd,max_err)
         trunc_err = norm(S[set_bd+1:end])^2
         if(trunc_err>1E-6)
             println("truncation error:",trunc_err)
@@ -109,7 +111,7 @@ function canonicalize_right_one_site(M::myMPDO, site::Int;truncation = false, ma
     end
     S = S./norm(S)
     if(truncation == true)
-        set_bd = truncate(S,max_bd,max_err)
+        set_bd = mytruncate(S,max_bd,max_err)
         trunc_err = norm(S[set_bd+1:end])^2
         if(trunc_err>1E-6)
             println("truncation error:",trunc_err)
@@ -172,7 +174,7 @@ function unitary_evol_two_site_system(M::myMPDO, U::Matrix, site::Int, dir = "l"
         U2,S2,V2 = svd(A_evol_mat,alg=LinearAlgebra.QRIteration())
     end
     if(truncation == true)
-        set_bd = truncate(S2, max_bd, max_err)
+        set_bd = mytruncate(S2, max_bd, max_err)
         trunc_err = norm(S2[set_bd+1:end])^2
         if(trunc_err>1E-6)
             println("truncation error:",trunc_err)
@@ -221,7 +223,7 @@ function unitary_evol_two_site_ancilla(M::myMPDO, U::Matrix, site::Int, dir = "l
         U2,S2,V2 = svd(A_evol_mat,alg=LinearAlgebra.QRIteration())
     end
     if(truncation == true)
-        set_bd = truncate(S2, max_bd, max_err)
+        set_bd = mytruncate(S2, max_bd, max_err)
         trunc_err = norm(S2[set_bd+1:end])^2
         if(trunc_err>1E-6)
             println("truncation error:",trunc_err)
@@ -449,4 +451,116 @@ function MPDO_to_dense(M::myMPDO{T}) where T
     end
     rho = reshape(tmp,(dS^L,dA^L))
     return rho
+end
+
+function optimize_overlap_onefloor(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix};truncation = true, max_bd = 1024, max_err=1E-10)
+    ## Act a sequential circuit on M1 and maximize |<M2|M1>|
+    ## Us = initial guess of the unitary network. 
+    ## Us order: U_{12}, U_{23}, ... U{n-1,n} U_{n-2,n-1} ... U_{12} 
+    ## one floor: length(Us) = 2N-3 (k-floor length(Us) = k*(2N-4) + 1) 
+    ## Assumes that M1 and M2 are right-canonical ** important **
+    ## note - unitaries are acted on M2 (ancilla leg) - and we will return the modified M2 in right canonical form
+    N = length(M1)
+    @assert length(Us) == 2*N-3  ## This is one-floor constraint
+    
+    ov_opts = Float64[] #optimized fidelity after applying each optimization
+    
+    ## 1. precontract the tensor network from M1 and save all intermidates
+    M1_interms = myMPDO[]
+    push!(M1_interms, M1);
+    M1cp = copy(M1)
+    for i in 1:N-1
+        U = Us[i]
+        site = i;
+        ~, M1_out = unitary_evol_two_site_ancilla(M1cp, U, site, "l"; truncation = truncation, max_bd = max_bd, max_err = max_err)
+        push!(M1_interms, M1_out)
+        M1cp = copy(M1_out)
+    end
+    for i in N:2*N-3
+        site = 2*N-i-2
+        U = Us[i]
+        ~, M1_out = unitary_evol_two_site_ancilla(M1cp, U, site, "r"; truncation = truncation, max_bd = max_bd, max_err = max_err)
+        push!(M1_interms, M1_out)
+        M1cp = copy(M1_out) 
+    end
+    
+    ## 2. Left to right sweep - from U12 to U_{n-1,n} (reverse order of Us)
+    M1cp = M1_interms[end-1]
+    M2_interms = myMPDO[]
+    M2cp = copy(M2)
+    push!(M2_interms, M2cp)
+    l_env = diagm(ones(1))
+    r_envs = right_environments(M1cp,M2cp) ## Right canonical form assumed for M1  ## This will NOT change during the sweep 
+    push!(ov_opts,abs(tr(r_envs[end]))) ## Initial Us overlap
+    for i in 1:N-1
+        r_env = r_envs[N-i] ## right enviroment
+        
+        A1 = M1cp.TensorList[i]
+        A2 = M1cp.TensorList[i+1]
+        
+        B1 = M2cp.TensorList[i]
+        B2 = M2cp.TensorList[i+1]
+        
+        @tensor U_env[a1,a2,a1p,a2p] := l_env[b1,t1] * A1[t1,s,a1,t2] * conj(B1)[b1,s,a1p,b2] * A2[t2,ss,a2,t3] * r_env[t3,b3] *conj(B2)[b2,ss,a2p,b3]
+        d1,d2,d1p,d2p = size(U_env)
+        U_env = reshape(U_env,(d1*d2,d1p*d2p))
+        U = nothing; S=nothing; V=nothing;
+        try
+            U,S,V = svd(U_env,alg=LinearAlgebra.DivideAndConquer())
+        catch
+            U,S,V = svd(U_env,alg=LinearAlgebra.QRIteration())
+        end
+        U_opt = V*U'
+        ov = sum(S)
+        push!(ov_opts,ov) ## This is the optimized overlap
+        
+        ~, M2cp = unitary_evol_two_site_ancilla(M2cp, Matrix(U_opt'), i, "l"; truncation = truncation, max_bd = max_bd, max_err = max_err)
+        #ov = abs(compute_overlap(M1_interms[end-i],M2cp))
+        #@show ov
+        push!(M2_interms, M2cp)
+        if(i<N-1)
+            M1cp = M1_interms[end-i-1]
+            l_env = apply_TM_l(M1cp.TensorList[i],M2cp.TensorList[i],l_env)
+        end
+    end
+    
+    #println("Switch!!")
+    
+    ## 3. Right to left sweep from U_{n-2,n-1} to U_{1,2} (reverse order of Us)
+    ~,M2cp = canonicalize_right_one_site(M2cp, N)
+    M1cp = M1_interms[N-2]
+    l_envs = left_environments(M1cp,M2cp)
+    r_env = diagm(ones(1))
+    r_env = apply_TM_r(M1cp.TensorList[N],M2cp.TensorList[N],r_env)
+    for i in N-2:-1:1
+        l_env = l_envs[i]
+        A1 = M1cp.TensorList[i]
+        A2 = M1cp.TensorList[i+1]
+        
+        B1 = M2cp.TensorList[i]
+        B2 = M2cp.TensorList[i+1]  
+        @tensor U_env[a1,a2,a1p,a2p] := l_env[b1,t1] * A1[t1,s,a1,t2] * conj(B1)[b1,s,a1p,b2] * A2[t2,ss,a2,t3] * r_env[t3,b3] *conj(B2)[b2,ss,a2p,b3]
+        d1,d2,d1p,d2p = size(U_env)
+        U_env = reshape(U_env,(d1*d2,d1p*d2p))
+        U = nothing; S=nothing; V=nothing;
+        try
+            U,S,V = svd(U_env,alg=LinearAlgebra.DivideAndConquer())
+        catch
+            U,S,V = svd(U_env,alg=LinearAlgebra.QRIteration())
+        end
+        U_opt = V*U'
+        ov = sum(S)
+        push!(ov_opts,ov) ## This is the optimized overlap
+        
+        ~, M2cp = unitary_evol_two_site_ancilla(M2cp, Matrix(U_opt'), i, "r"; truncation = truncation, max_bd = max_bd, max_err = max_err)
+        
+        #ov = abs(compute_overlap(M1_interms[i],M2cp))
+       # @show ov
+        push!(M2_interms, M2cp)
+        if(i>1)
+            M1cp = M1_interms[i-1]
+            r_env = apply_TM_r(M1cp.TensorList[i+1],M2cp.TensorList[i+1],r_env)
+        end
+    end
+    return M2cp, ov_opts
 end
