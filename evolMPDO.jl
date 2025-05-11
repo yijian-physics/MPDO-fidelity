@@ -1,11 +1,11 @@
 using LinearAlgebra, TensorOperations, Statistics
 
-struct myMPS{T<:Number}
+struct myMPS{T<:Number}  # T is a subtype of Number
     TensorList::Array{Array{T,3},1} #List of myMPS tensors that represent the purification 
     #Tensor indices - left bond, system spin, right bond
 end
 
-Base.length(M::myMPS) = length(M.TensorList)
+Base.length(M::myMPS) = length(M.TensorList)    #Extend the existing Base.length function to work on new type myMPS
 phys_dim(M::myMPS) = size(M.TensorList[1],2)
 testnan(M::myMPS) = sum([sum(isnan.(ten)) for ten in M.TensorList])
 testnorm(M::myMPS) = findmin([norm(ten) for ten in M.TensorList])[1]
@@ -462,6 +462,8 @@ function optimize_overlap_onefloor(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix};tr
     ## note - unitaries are acted on M2 (ancilla leg) - and we will return the modified M2 in right canonical form
     N = length(M1)
     @assert length(Us) == 2*N-3  ## This is one-floor constraint
+    M1 = canonicalize_right(M1)
+    M2 = canonicalize_right(M2);
     
     ov_opts = Float64[] #optimized fidelity after applying each optimization
     
