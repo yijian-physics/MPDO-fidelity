@@ -11,7 +11,7 @@ phys_dim(M::myMPS) = size(M.TensorList[1],2)
 testnan(M::myMPS) = sum([sum(isnan.(ten)) for ten in M.TensorList])
 testnorm(M::myMPS) = findmin([norm(ten) for ten in M.TensorList])[1]
 max_bond_dim(M::myMPS) = findmax([size(ten,1) for ten in M.TensorList])[1]
-Base.copy(M::myMPS) = myMPS(copy(M.TensorList))
+Base.copy(M::myMPS) = myMPS([deepcopy(tensor) for tensor in M.TensorList])
 Base.complex(M::myMPS) = myMPS(complex.(M.TensorList))
 
 struct myMPDO{T<:Number}
@@ -25,7 +25,7 @@ ancilla_dim(M::myMPDO) = size(M.TensorList[1],3)
 testnan(M::myMPDO) = sum([sum(isnan.(ten)) for ten in M.TensorList])
 testnorm(M::myMPDO) = findmin([norm(ten) for ten in M.TensorList])[1]
 max_bond_dim(M::myMPDO) = findmax([size(ten,1) for ten in M.TensorList])[1]
-Base.copy(M::myMPDO) = myMPDO(copy(M.TensorList))
+Base.copy(M::myMPDO) = myMPDO([deepcopy(tensor) for tensor in M.TensorList])
 Base.complex(M::myMPDO) = myMPDO(complex.(M.TensorList))
 
 function product_state_init(T::Type, d::Int, N::Int) 
@@ -533,10 +533,11 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
     ## Left to right sweep U_{12} .... U_{n-1, n}
     M1cp = M1_interms[end] ## M1 after acting on all Us ## equally well to choose end-1, does not matter except the first ov
     M2cp = copy(M2)
-    push!(M2_interms, M2cp)
+    push!(M2_interms, copy(M2cp))
     l_env = diagm(ones(1))
     r_envs = right_environments(M1cp,M2cp) ## This is very tricky - but correct to choose M1_interms[end] in the first argument
     ov = abs(tr(r_envs[end]))
+    println("Overlap before optimization: ",ov)
     push!(ov_opts,ov) ## Initial overlap with Us
     for i in 1:N-2  ## V20250511 change grouping to 1 - N-2 and N-1 - 1
         println("Optimizing unitary acting on $(i), $(i+1)")
@@ -551,7 +552,7 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
         ~, M2cp = unitary_evol_two_site_ancilla(M2cp, Matrix(U_opt'), i, "l"; truncation = truncation, max_bd = max_bd, max_err = max_err)
         ov_debug = compute_overlap(M1_interms[end-i], M2cp)
         println("Debug mode: Directly compute the overlap: ", ov_debug)
-        push!(M2_interms, M2cp)
+        push!(M2_interms, copy(M2cp))
         if(i<N-1) ## Skip for the last iteration
             l_env = apply_TM_l(M1cp.TensorList[i],M2cp.TensorList[i],l_env)
         end
@@ -574,7 +575,7 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
         ~, M2cp = unitary_evol_two_site_ancilla(M2cp, Matrix(U_opt'), i, "r"; truncation = truncation, max_bd = max_bd, max_err = max_err)  
         ov_debug = compute_overlap(M1_interms[i], M2cp)
         println("Debug mode: Directly compute the overlap: ", ov_debug)
-        push!(M2_interms, M2cp)
+        push!(M2_interms, copy(M2cp))
         if(i>1)
             M1cp = M1_interms[i-1]
             r_env = apply_TM_r(M1cp.TensorList[i+1],M2cp.TensorList[i+1],r_env)
@@ -612,11 +613,14 @@ function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matr
     M1_interms = unitary_evolution_two_floor_ancilla(M1, Us; truncation = truncation, max_bd = max_bd, max_err = max_err)
     
     ov_opts = Float64[]
-    for _ in 1:nsweep
+    for k in 1:nsweep
+        println("Sweep: $k")
+        println("Reverse Sweep")
         M2_interms, ovs = optimize_overlap_sweep_reverse_order(M1_interms, M2; truncation = truncation, max_bd = max_bd, max_err = max_err)
         
         push!(ov_opts, ovs...)
-    
+        
+        println("Forward Sweep")
         M1_interms, ovs = optimize_overlap_sweep_forward_order(M1, M2_interms; truncation = truncation, max_bd = max_bd, max_err = max_err)
         
         push!(ov_opts, ovs...)
