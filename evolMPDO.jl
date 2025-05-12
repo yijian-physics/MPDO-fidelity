@@ -521,7 +521,7 @@ function getU_env(M1::myMPDO, M2::myMPDO, site::Int, lenv::Matrix, renv::Matrix)
     return U_env
 end
     
-function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::myMPDO;truncation = true, max_bd = 1024, max_err=1E-10)
+function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::myMPDO;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
     ### Optimize Us in the reverse order
     ### Act the optimized Us on M2
     ### return the M2 intermidates and optimized overlap
@@ -537,10 +537,14 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
     l_env = diagm(ones(1))
     r_envs = right_environments(M1cp,M2cp) ## This is very tricky - but correct to choose M1_interms[end] in the first argument
     ov = abs(tr(r_envs[end]))
-    println("Overlap before optimization: ",ov)
+    if(verbose>2)
+        println("Overlap before optimization: ",ov)
+    end
     push!(ov_opts,ov) ## Initial overlap with Us
     for i in 1:N-2  ## V20250511 change grouping to 1 - N-2 and N-1 - 1
-        println("Optimizing unitary acting on $(i), $(i+1)")
+        if(verbose>1)
+            println("Optimizing unitary acting on $(i), $(i+1)")
+        end
         M1cp = M1_interms[end-i]
         r_env = r_envs[N-i] ## right enviroment, after contracting the **3rd**(each iteration +1 until identity(1)) site
         
@@ -548,10 +552,14 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
         ov, U_opt = optimal_U_from_env(U_env)  
         
         push!(ov_opts,ov) ## This is the optimized overlap
-        println("Optimized overlap through svd: ",ov)
+        if(verbose>1)
+            println("Optimized overlap through svd: ",ov)
+        end
         ~, M2cp = unitary_evol_two_site_ancilla(M2cp, Matrix(U_opt'), i, "l"; truncation = truncation, max_bd = max_bd, max_err = max_err)
-        ov_debug = compute_overlap(M1_interms[end-i], M2cp)
-        println("Debug mode: Directly compute the overlap: ", ov_debug)
+        if(verbose>2)
+            ov_debug = compute_overlap(M1_interms[end-i], M2cp)
+            println("Debug mode: Directly compute the overlap: ", ov_debug)
+        end
         push!(M2_interms, copy(M2cp))
         if(i<N-1) ## Skip for the last iteration
             l_env = apply_TM_l(M1cp.TensorList[i],M2cp.TensorList[i],l_env)
@@ -565,20 +573,29 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
     r_env = diagm(ones(1))
     #r_env = apply_TM_r(M1cp.TensorList[N],M2cp.TensorList[N],r_env) # V20250511 commented out
     for i in N-1:-1:1
-        println("Optimizing unitary acting on $(i), $(i+1)")
+        if(verbose>1)
+            println("Optimizing unitary acting on $(i), $(i+1)")
+        end
         l_env = l_envs[i]
         
         U_env = getU_env(M1cp, M2cp, i, l_env, r_env)
         ov, U_opt = optimal_U_from_env(U_env)
         push!(ov_opts,ov) ## This is the optimized overlap
-        println("Optimized overlap through svd: ",ov)
+        if(verbose>1)
+            println("Optimized overlap through svd: ",ov)
+        end
         ~, M2cp = unitary_evol_two_site_ancilla(M2cp, Matrix(U_opt'), i, "r"; truncation = truncation, max_bd = max_bd, max_err = max_err)  
-        ov_debug = compute_overlap(M1_interms[i], M2cp)
-        println("Debug mode: Directly compute the overlap: ", ov_debug)
+        if(verbose>2)
+            ov_debug = compute_overlap(M1_interms[i], M2cp)
+            println("Debug mode: Directly compute the overlap: ", ov_debug)
+        end
         push!(M2_interms, copy(M2cp))
         if(i>1)
             M1cp = M1_interms[i-1]
             r_env = apply_TM_r(M1cp.TensorList[i+1],M2cp.TensorList[i+1],r_env)
+        end
+        if(verbose == 1 && i == 1)
+            println("New overlap: ", ov_opts[end])
         end
     end
     ## Note that the M2_interms[end] is now with canonical center at site 2
@@ -600,14 +617,14 @@ function optimize_overlap_onefloor(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix};tr
     return M2_interms, ov_opts
 end
 
-function optimize_overlap_sweep_forward_order(M1::myMPDO, M2_interms::Vector{<:myMPDO}; truncation = true, max_bd = 1024, max_err = 1E-10)
+function optimize_overlap_sweep_forward_order(M1::myMPDO, M2_interms::Vector{<:myMPDO}; truncation = true, max_bd = 1024, max_err = 1E-10,verbose=1)
     ### M2 interms = [M2, U'_{12}*M2, U'_{23}*M2 ....], U_{12} is the LAST of Us
     ### Direct apply previous method to optimize U_{12}, U_{23} .... (forward order)
-    M1_interms, ov_opts = optimize_overlap_sweep_reverse_order(M2_interms, M1; truncation = truncation, max_bd = max_bd, max_err = max_err)
+    M1_interms, ov_opts = optimize_overlap_sweep_reverse_order(M2_interms, M1; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
     return M1_interms, ov_opts
 end
 
-function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10)
+function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
     ### Sweep for optimizing Us
     ### Assuming both M1 and M2 are right canonical
     M1_interms = unitary_evolution_two_floor_ancilla(M1, Us; truncation = truncation, max_bd = max_bd, max_err = max_err)
@@ -615,13 +632,17 @@ function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matr
     ov_opts = Float64[]
     for k in 1:nsweep
         println("Sweep: $k")
-        println("Reverse Sweep")
-        M2_interms, ovs = optimize_overlap_sweep_reverse_order(M1_interms, M2; truncation = truncation, max_bd = max_bd, max_err = max_err)
+        if(verbose>1)
+            println("Reverse Sweep")
+        end
+        M2_interms, ovs = optimize_overlap_sweep_reverse_order(M1_interms, M2; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
         
         push!(ov_opts, ovs...)
-        
-        println("Forward Sweep")
-        M1_interms, ovs = optimize_overlap_sweep_forward_order(M1, M2_interms; truncation = truncation, max_bd = max_bd, max_err = max_err)
+
+        if(verbose>1)
+            println("Forward Sweep")
+        end
+        M1_interms, ovs = optimize_overlap_sweep_forward_order(M1, M2_interms; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
         
         push!(ov_opts, ovs...)
     end
