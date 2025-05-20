@@ -1,4 +1,4 @@
-using LinearAlgebra,TensorOperations,LinearMaps,Arpack,ITensors
+using LinearAlgebra,TensorOperations,LinearMaps,Arpack,ITensors, ITensorMPS
 
 function apply_Ising_H(v::AbstractVector,H_local::Matrix)
     D = length(v)
@@ -115,7 +115,7 @@ function MPS_to_array(psi::MPS)
         end
         physind=setdiff(inds(psi[i]),union(rightind,leftind))
         MPSinds=vcat(leftind,physind,rightind)
-        A=Array(psi[i],MPSinds...)
+        A=Array(psi[i],MPSinds...)                   # Array(T::ITensor, inds::Index...), returns a plain Julia Array with raw numerical values
         push!(As,A)
     end
     As[1]=reshape(As[1],(1,2,2))

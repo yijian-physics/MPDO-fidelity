@@ -250,6 +250,10 @@ apply_TM_r(A::Array{<:Number,4},B::Array{<:Number,4},r::Array{<:Number,2})=ncon(
 
 function right_environments(M1::myMPDO,M2::myMPDO)
     ## starting from the right, compute the overlap of <M2|M1> by applying transfer matrices
+    # Output length is N+1
+    #  -2 ---M2^*--
+    #        |    |
+    #  -1 ---M1----
     N = length(M1)
     r = diagm(ones(1))
     rs = Matrix[]
@@ -265,6 +269,9 @@ end
     
 function left_environments(M1::myMPDO,M2::myMPDO)
     ## starting from the left, compute the overlap of <M2|M1> by applying transfer matrices
+    #     ---M2^*-- -1
+    #    |   |    
+    #     ---M1---- -2
     N = length(M1)
     l = diagm(ones(1))
     ls = Matrix[]
@@ -284,7 +291,10 @@ function optimize_overlap_onelayer(M1::myMPDO,M2::myMPDO,dir = "l";truncation = 
     ## dir="r" - add unitary from right to left - this assumes that M1 is left-canonical **important**
     ## note - unitaries are acted on M1 (ancilla leg) - and we will return the modified M1 in left/right canonical form
     M1cp = copy(M1)
+    # println("M1 pointer: ", objectid(M1))
+    # println("M1cp pointer: ", objectid(M1cp)) # examine the memory address is changed
     ov_opts = Float64[] #optimized fidelity after applying each unitary
+
     rs = right_environments(M1,M2)
     push!(ov_opts,abs(tr(rs[end])))
     N = length(M1)
@@ -292,26 +302,14 @@ function optimize_overlap_onelayer(M1::myMPDO,M2::myMPDO,dir = "l";truncation = 
     for i in 1:N-1
         r_env = rs[N-i] ## right enviroment
         
-        A1 = M1cp.TensorList[i]
-        A2 = M1cp.TensorList[i+1]
+        U_env = getU_env(M1cp, M2, i, l_env, r_env)
+        ov, U_opt = optimal_U_from_env(U_env)
+        push!(ov_opts, ov)
         
-        B1 = M2.TensorList[i]
-        B2 = M2.TensorList[i+1]
-        
-        @tensor U_env[a1,a2,a1p,a2p] := l_env[b1,t1] * A1[t1,s,a1,t2] * conj(B1)[b1,s,a1p,b2] * A2[t2,ss,a2,t3] * r_env[t3,b3] *conj(B2)[b2,ss,a2p,b3]
-        d1,d2,d1p,d2p = size(U_env)
-        U_env = reshape(U_env,(d1*d2,d1p*d2p))
-        U = nothing; S=nothing; V=nothing;
-        try
-            U,S,V = svd(U_env,alg=LinearAlgebra.DivideAndConquer())
-        catch
-            U,S,V = svd(U_env,alg=LinearAlgebra.QRIteration())
-        end
-        U_opt = V*U'
-        push!(ov_opts,sum(S)) ## This is the optimized overlap
         ~, M1cp = unitary_evol_two_site_ancilla(M1cp, U_opt, i, dir, truncation = truncation, max_bd = max_bd, max_err=max_err)
         l_env = apply_TM_l(M1cp.TensorList[i],M2.TensorList[i],l_env)
     end
+    # println("M1cp pointer: ", objectid(M1cp)) 
     return M1cp, ov_opts
 end
 
@@ -331,19 +329,23 @@ function optimize_overlap(M1::myMPDO,M2::myMPDO,iters = 10;truncation = true, ma
     M1cp = copy(M1)
     M2cp = copy(M2)
     ov = nothing
+    ov_all = zeros(0)
     for j in 1:iters
         println("----iteration $(j) -----")
-        M1cp = canonicalize_right(M1cp)
-        M2cp = canonicalize_right(M2cp);
+        M1cp = canonicalize_right(M1cp) # should be M1cp = canonicalize_right(M1cp)
+        println("debug")
+        M2cp = canonicalize_right(M2cp); # should be M2cp = canonicalize_right(M2cp)
         M1cp, ovs = optimize_overlap_onelayer(M1cp,M2cp);
+        append!(ov_all, ovs)
         M2cp, ovs = optimize_overlap_onelayer(M2cp,M1cp);
+        append!(ov_all, ovs)
         ov = ovs[end]
         chi1 = max_bond_dim(M1cp)
         chi2 = max_bond_dim(M2cp)
         println("Bond dimensions: $chi1,$chi2")
         println("Overlap: $ov")
     end
-    return M1cp,M2cp,ov
+    return M1cp,M2cp,ov_all
 end
 
 function MPS_to_MPDO(M::myMPS{T},d::Int = phys_dim(M)) where T
@@ -371,6 +373,30 @@ function add_noise_MPS(M::myMPS{T}, Ws::Vector{Array{T,3}}) where T
     end
     return myMPDO(Ts)
 end
+
+
+function add_ancillas(M::myMPDO{T}) where T
+    ## add ancillas |0> to MPDO
+    
+    da = 2
+    Mcp = copy(M)
+
+    for i in 1:length(M)
+        Mi = Mcp.TensorList[i]
+        D1,d,dp,D2 = size(Mi)
+        Mi_acl = zeros(eltype(Mi), D1, d, dp, da, D2)
+        
+        for l in 1:D1, s in 1:d, a in 1:dp, r in 1:D2
+            Mi_acl[l, s, a, 1, r] = Mi[l, s, a, r]
+        end
+
+        Mi_acl_reshaped = reshape(Mi_acl, D1, d, dp * da, D2)
+        Mcp.TensorList[i] = Mi_acl_reshaped
+    end
+
+    return Mcp
+end
+
 
 function purified_dephasing_channel(p::Float64, dir::Vector)
     ## isometry: |alpha> -> sqrt(1-p/2) |alpha>|0> + sqrt(p/2)(sigma_dir|alpha>)|1>
@@ -459,6 +485,7 @@ function unitary_evolution_two_floor_ancilla(M::myMPDO, Us::Vector{<:Matrix};tru
     ## Us order: U_{12}, U_{23}, ... U{n-1,n} U_{n-2,n-1} ... U_{12} 
     ## Assume Right canonical form as input
     ## return all intermidiate MPDOs and the last one canonical center is at site 2.
+    # Output length is 2(N-1)
     
     N = length(M)
     @assert length(Us) == 2*N-3  ## This is one-floor constraint
@@ -508,6 +535,15 @@ function getU_env(M1::myMPDO, M2::myMPDO, site::Int, lenv::Matrix, renv::Matrix)
     ### |      |       |    |
     ### ------ B1*---- B2----
     ###        |       |
+
+    ## same as?
+    ###        |       |
+    ### ------ B1*---- B2*---
+    ### |      |       |    |
+    ### lenv   |       |   renv
+    ### |      |       |    |
+    ### ------ A1----- A2----
+    ###        |       |
     
     ### This tensor network gives U_env
     
@@ -520,8 +556,29 @@ function getU_env(M1::myMPDO, M2::myMPDO, site::Int, lenv::Matrix, renv::Matrix)
     @tensor U_env[a1,a2,a1p,a2p] := lenv[b1,t1] * A1[t1,s,a1,t2] * conj(B1)[b1,s,a1p,b2] * A2[t2,ss,a2,t3] * renv[t3,b3] *conj(B2)[b2,ss,a2p,b3]
     return U_env
 end
+
+
+function check_environment(M1::myMPDO, M2::myMPDO, site::Int)
+    ## the sites where unitary act is site, site+1
+    l_env = diagm(ones(1)) 
+    r_env = diagm(ones(1)) 
+    for i in 1:site-1
+        A = M1.TensorList[i]
+        B = M2.TensorList[i]
+        l_env = apply_TM_l(A,B,l_env)
+    end
+
+    for i in N:-1:site+2
+        A = M1.TensorList[i]
+        B = M2.TensorList[i]
+        r_env = apply_TM_r(A,B,r_env)
+    end
+
+    return l_env, r_env
+end
+
     
-function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::myMPDO;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
+function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::myMPDO;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1, debug=0)
     ### Optimize Us in the reverse order
     ### Act the optimized Us on M2
     ### return the M2 intermidates and optimized overlap
@@ -547,9 +604,21 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
         end
         M1cp = M1_interms[end-i]
         r_env = r_envs[N-i] ## right enviroment, after contracting the **3rd**(each iteration +1 until identity(1)) site
+
+        if debug == 1
+            ## see whether the environment tensor is as expected
+            # l_env_db, r_env_db = check_environment(M1cp, M2cp,i)
+            # println("Error for l_env: ", norm(l_env-l_env_db))
+            # println("Error for r_env: ", norm(r_env-r_env_db))
+            l_env, r_env = check_environment(M1cp, M2cp,i)
+        end
         
         U_env = getU_env(M1cp, M2cp, i, l_env, r_env)
         ov, U_opt = optimal_U_from_env(U_env)  
+
+        if debug == 2
+            println(U_opt)
+        end
         
         push!(ov_opts,ov) ## This is the optimized overlap
         if(verbose>1)
@@ -561,9 +630,8 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
             println("Debug mode: Directly compute the overlap: ", ov_debug)
         end
         push!(M2_interms, copy(M2cp))
-        if(i<N-1) ## Skip for the last iteration
-            l_env = apply_TM_l(M1cp.TensorList[i],M2cp.TensorList[i],l_env)
-        end
+        l_env = apply_TM_l(M1cp.TensorList[i],M2cp.TensorList[i],l_env)
+        
     end
     
     ## Right to left sweep U_{n-2,n-1} to U_{1,2} 
@@ -576,10 +644,24 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
         if(verbose>1)
             println("Optimizing unitary acting on $(i), $(i+1)")
         end
+        M1cp = M1_interms[i]  # 0516
         l_env = l_envs[i]
+
+        if debug == 1
+            ## see whether the environment tensor is as expected
+            # l_env_db, r_env_db = check_environment(M1cp, M2cp,i)
+            # println("Error for l_env: ", norm(l_env-l_env_db))
+            # println("Error for r_env: ", norm(r_env-r_env_db))
+            l_env, r_env = check_environment(M1cp, M2cp,i)
+        end
         
         U_env = getU_env(M1cp, M2cp, i, l_env, r_env)
         ov, U_opt = optimal_U_from_env(U_env)
+
+        if debug == 2
+            println(U_opt)
+        end
+
         push!(ov_opts,ov) ## This is the optimized overlap
         if(verbose>1)
             println("Optimized overlap through svd: ",ov)
@@ -591,7 +673,7 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
         end
         push!(M2_interms, copy(M2cp))
         if(i>1)
-            M1cp = M1_interms[i-1]
+            # M1cp = M1_interms[i-1]  # 0516
             r_env = apply_TM_r(M1cp.TensorList[i+1],M2cp.TensorList[i+1],r_env)
         end
         if(verbose == 1 && i == 1)
@@ -602,7 +684,7 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
     return M2_interms, ov_opts
 end
 
-function optimize_overlap_onefloor(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix};truncation = true, max_bd = 1024, max_err=1E-10)
+function optimize_overlap_onefloor(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix};truncation = true, max_bd = 1024, max_err=1E-10, debug=0)
     ## Act a sequential circuit on M1 and maximize |<M2|M1>|
     ## Us = initial guess of the unitary network. 
     ## Us order: U_{12}, U_{23}, ... U{n-1,n} U_{n-2,n-1} ... U_{12} 
@@ -610,9 +692,12 @@ function optimize_overlap_onefloor(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix};tr
     ## Assumes that M1 and M2 are right-canonical ** important **
     ## note - unitaries are acted on M2 (ancilla leg) - and we will return the modified M2 in right canonical form
     ## This only sweep once
+
+    M1 = canonicalize_right(M1)
+    M2 = canonicalize_right(M2)
     M1_interms = unitary_evolution_two_floor_ancilla(M1, Us; truncation = truncation, max_bd = max_bd, max_err = max_err)
     
-    M2_interms, ov_opts = optimize_overlap_sweep_reverse_order(M1_interms, M2; truncation = truncation, max_bd = max_bd, max_err = max_err)
+    M2_interms, ov_opts = optimize_overlap_sweep_reverse_order(M1_interms, M2; truncation = truncation, max_bd = max_bd, max_err = max_err, debug=debug)
     
     return M2_interms, ov_opts
 end
@@ -627,6 +712,12 @@ end
 function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
     ### Sweep for optimizing Us
     ### Assuming both M1 and M2 are right canonical
+    
+    # println(objectid(M1))
+    M1 = canonicalize_right(M1)
+    M2 = canonicalize_right(M2)
+    # println(objectid(M1))
+    
     M1_interms = unitary_evolution_two_floor_ancilla(M1, Us; truncation = truncation, max_bd = max_bd, max_err = max_err)
     
     ov_opts = Float64[]
