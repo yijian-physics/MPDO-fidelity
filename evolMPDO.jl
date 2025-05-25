@@ -293,6 +293,7 @@ function unitary_evol_two_site_system(M::myMPDO, U::Matrix, site::Int, dir = "l"
         S2 = S2[1:set_bd]
         U2 = U2[:,1:set_bd]
         V2 = V2[:,1:set_bd]
+        # S2 = S2./norm(S2)  # 2025/5/25
     end
     if(dir == "l")
         AL = reshape(U2, (DL,d1,d1A,length(S2)))
@@ -342,6 +343,7 @@ function unitary_evol_two_site_ancilla(M::myMPDO, U::Matrix, site::Int, dir = "l
         S2 = S2[1:set_bd]
         U2 = U2[:,1:set_bd]
         V2 = V2[:,1:set_bd]
+        # S2 = S2./norm(S2)  # 2025/5/25
     end
     if(dir == "l")
         AL = reshape(U2, (DL,d1,d1A,length(S2)))
@@ -350,6 +352,9 @@ function unitary_evol_two_site_ancilla(M::myMPDO, U::Matrix, site::Int, dir = "l
         AL = reshape(U2*diagm(0=>S2), (DL,d1,d1A,length(S2)))
         AR = reshape(V2',(length(S2),d2,d2A,DR))
     end
+
+    ## BUG?? S2 is not normalized after truncation??
+
     M.TensorList[site] = AL
     M.TensorList[site+1] = AR    
     return S2, M
@@ -396,6 +401,15 @@ function left_environments(M1::myMPDO,M2::myMPDO)
     end
     return ls
 end
+
+
+function MPDO_norm(M1::myMPDO)
+
+    ls = left_environments(M1, M1)
+
+    return ls[end]
+end
+
 
 function optimize_overlap_onelayer(M1::myMPDO,M2::myMPDO,dir = "l";truncation = true, max_bd = 1024, max_err=1E-10)
     ## Act a sequential circuit on M1 and maximize |<M2|M1>|
@@ -489,10 +503,10 @@ function add_noise_MPS(M::myMPS{T}, Ws::Vector{Array{T,3}}) where T
 end
 
 
-function add_ancillas(M::myMPDO{T}) where T
+function add_ancillas(M::myMPDO{T}; da=2) where T
     ## add ancillas |0> to MPDO
+    ## da is dimension of ancilla
     
-    da = 2
     Mcp = copy(M)
 
     for i in 1:length(M)
@@ -717,6 +731,31 @@ function unitary_evolution_two_floor_ancilla(M::myMPDO, Us::Vector{<:Matrix};tru
     end
     return M1_interms
 end
+
+
+# function MPS_at_middle(M::myMPDO, Us_down::Vector{<:Matrix};truncation = true, max_bd = 1024, max_err=1E-10)
+#     ## Apply a two-floor-unitary Us_down (length 2N-3) on M
+#     ## Us order: U_{12}, U_{23}, ... U{n-1,n} U_{n-2,n-1} ... U_{12} 
+#     ## Assume Right canonical form as input
+#     ## the last one canonical center is at site 2.
+    
+#     N = length(M)
+#     @assert length(Us_down) == 2*N-3  ## This is one-floor constraint
+    
+#     M1cp = copy(M)
+#     for i in 1:N-2  
+#         U = Us_down[i]
+#         site = i;
+#         ~, M1cp = unitary_evol_two_site_ancilla(M1cp, U, site, "l"; truncation = truncation, max_bd = max_bd, max_err = max_err)
+#     end
+#     for i in N-1:2*N-3 
+#         site = 2*N-i-2
+#         U = Us_down[i]
+#         ~, M1cp = unitary_evol_two_site_ancilla(M1cp, U, site, "r"; truncation = truncation, max_bd = max_bd, max_err = max_err)
+#     end
+#     return M1cp
+# end
+
     
 function optimal_U_from_env(U_env::Array{T,4}) where T
     ### maximize |tr(env' * U)|
@@ -920,11 +959,10 @@ end
 function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
     ### Sweep for optimizing Us
     ### Assuming both M1 and M2 are right canonical
-    
-    # println(objectid(M1))
+        
     M1 = canonicalize_right(M1)
     M2 = canonicalize_right(M2)
-    # println(objectid(M1))
+
     
     M1_interms = unitary_evolution_two_floor_ancilla(M1, Us; truncation = truncation, max_bd = max_bd, max_err = max_err)
     
@@ -935,6 +973,7 @@ function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matr
             println("Reverse Sweep")
         end
         M2_interms, ovs = optimize_overlap_sweep_reverse_order(M1_interms, M2; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+        println("Max bond dim: ", max_bond_dim(M2_interms[end]))
         
         push!(ov_opts, ovs...)
 
@@ -942,9 +981,49 @@ function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matr
             println("Forward Sweep")
         end
         M1_interms, ovs = optimize_overlap_sweep_forward_order(M1, M2_interms; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+        println("Max bond dim: ", max_bond_dim(M1_interms[end]))
         
         push!(ov_opts, ovs...)
+
+        if k==nsweep
+            println("Final norm: ", MPDO_norm(M1_interms[end]))
+        end
     end
     return ov_opts
 end  
     
+function optimize_overlap_real_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us_up::Vector{<:Matrix}, Us_down::Vector{<:Matrix},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
+
+    ov_opts = Float64[]
+
+    M1_interms_down = unitary_evolution_two_floor_ancilla(M1, Us_down; truncation = truncation, max_bd = max_bd, max_err = max_err)
+    M1_mid = copy(M1_interms_down[end])
+
+    M1_interms_up = unitary_evolution_two_floor_ancilla(M1_mid, Us_up; truncation = truncation, max_bd = max_bd, max_err = max_err)
+
+    for k in 1:nsweep
+        println("Sweep: $k")
+        M2_interms_up, ovs = optimize_overlap_sweep_reverse_order(M1_interms_up, M2; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+        push!(ov_opts, ovs...)
+
+        M2_mid = copy(M2_interms_up[end])
+        M2_interms_down, ovs = optimize_overlap_sweep_reverse_order(M1_interms_down, M2_mid; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+        push!(ov_opts, ovs...)
+        println("Max bond dim: ", max_bond_dim(M2_interms_down[end]))
+
+        #### 
+        M1_interms_down, ovs = optimize_overlap_sweep_forward_order(M1, M2_interms_down; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+        push!(ov_opts, ovs...)
+
+        M1_mid = copy(M1_interms_down[end])
+
+        M1_interms_up, ovs = optimize_overlap_sweep_forward_order(M1_mid, M2_interms_up; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+        push!(ov_opts, ovs...)
+        println("Max bond dim: ", max_bond_dim(M1_interms_up[end]))
+
+        if k==nsweep
+            println("Final norm: ", MPDO_norm(M1_interms_up[end]))
+        end
+    end
+    return ov_opts
+end
