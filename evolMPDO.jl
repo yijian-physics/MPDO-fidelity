@@ -992,37 +992,61 @@ function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matr
     return ov_opts
 end  
     
-function optimize_overlap_real_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us_up::Vector{<:Matrix}, Us_down::Vector{<:Matrix},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
+
+function optimize_overlap_real_nfloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{Vector{Matrix}},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
+
+    # M2 is at the top, and M1 is at the bottum
 
     ov_opts = Float64[]
+    nfloor = size(Us)[1]
 
-    M1_interms_down = unitary_evolution_two_floor_ancilla(M1, Us_down; truncation = truncation, max_bd = max_bd, max_err = max_err)
-    M1_mid = copy(M1_interms_down[end])
+    M1_interms = Vector{Vector{myMPDO}}(undef, nfloor)
+    M2_interms = Vector{Vector{myMPDO}}(undef, nfloor)
+    M1_mid = Vector{myMPDO}(undef, nfloor)
+    M2_mid = Vector{myMPDO}(undef, nfloor)
+    
+    M1_mid[nfloor] = M1
+    M2_mid[1] = M2
 
-    M1_interms_up = unitary_evolution_two_floor_ancilla(M1_mid, Us_up; truncation = truncation, max_bd = max_bd, max_err = max_err)
+    for iflr in 1:nfloor
+        ind = nfloor + 1 - iflr
+        M1_interms_this = unitary_evolution_two_floor_ancilla(M1_mid[ind], Us[ind]; truncation = truncation, max_bd = max_bd, max_err = max_err)
+        M1_interms[ind] = M1_interms_this
+        if iflr < nfloor
+            M1_mid[ind-1] = copy(M1_interms_this[end])
+        end
+    end
 
     for k in 1:nsweep
         println("Sweep: $k")
-        M2_interms_up, ovs = optimize_overlap_sweep_reverse_order(M1_interms_up, M2; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
-        push!(ov_opts, ovs...)
 
-        M2_mid = copy(M2_interms_up[end])
-        M2_interms_down, ovs = optimize_overlap_sweep_reverse_order(M1_interms_down, M2_mid; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
-        push!(ov_opts, ovs...)
-        println("Max bond dim: ", max_bond_dim(M2_interms_down[end]))
+        for iflr in 1:nfloor
+            M2_interms_this, ovs = optimize_overlap_sweep_reverse_order(M1_interms[iflr], M2_mid[iflr]; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+            M2_interms[iflr] = M2_interms_this
+            push!(ov_opts, ovs...)
+            if iflr < nfloor
+                M2_mid[iflr+1] = copy(M2_interms_this[end])
+            end
+            if iflr == nfloor
+                println("Max bond dim: ", max_bond_dim(M2_interms_this[end]))
+            end
+        end
 
-        #### 
-        M1_interms_down, ovs = optimize_overlap_sweep_forward_order(M1, M2_interms_down; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
-        push!(ov_opts, ovs...)
-
-        M1_mid = copy(M1_interms_down[end])
-
-        M1_interms_up, ovs = optimize_overlap_sweep_forward_order(M1_mid, M2_interms_up; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
-        push!(ov_opts, ovs...)
-        println("Max bond dim: ", max_bond_dim(M1_interms_up[end]))
+        for iflr in 1:nfloor
+            ind = nfloor + 1 - iflr
+            M1_interms_this, ovs = optimize_overlap_sweep_forward_order(M1_mid[ind], M2_interms[ind]; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+            M1_interms[ind] = M1_interms_this
+            push!(ov_opts, ovs...)
+            if iflr < nfloor
+                M1_mid[ind-1] = copy(M1_interms_this[end])
+            end
+            if iflr == nfloor
+                println("Max bond dim: ", max_bond_dim(M1_interms_this[end]))
+            end
+        end
 
         if k==nsweep
-            println("Final norm: ", MPDO_norm(M1_interms_up[end]))
+            println("Final norm: ", MPDO_norm(M1_interms[1][end]))
         end
     end
     return ov_opts
