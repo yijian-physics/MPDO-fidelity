@@ -503,6 +503,32 @@ function add_noise_MPS(M::myMPS{T}, Ws::Vector{Array{T,3}}) where T
 end
 
 
+function add_CP(M::myMPDO, Ks::Array,i::Int) 
+
+    M_new = copy(M)
+    tmp = copy(M.TensorList[i])
+    @tensor tmp2[l,s,a,r] := Ks[s,sp] * tmp[l,sp,a,r]
+
+    M_new.TensorList[i] = tmp2
+
+    return M_new
+
+end
+
+
+function add_operator(A::myMPS, Ks::Array,i::Int)
+
+    A_new = copy(A)
+    tmp = copy(A.TensorList[i])
+    @tensor tmp2[l,s,r] := Ks[s,sp] * tmp[l,sp,r]
+
+    A_new.TensorList[i] = tmp2
+
+    return A_new
+
+end
+
+
 function add_ancillas(M::myMPDO{T}; da=2) where T
     ## add ancillas |0> to MPDO
     ## da is dimension of ancilla
@@ -575,13 +601,16 @@ end
 
 function MPS_to_dense(M::myMPS{T}) where T
     ## Only run this for small systems!!
+    ## output a wavefunction of MPS state
+
     d = phys_dim(M)
     L = length(M)
     tmp = M.TensorList[1]
     for i in 2:L
         A = M.TensorList[i]
-        @tensor tmp[l,s1,s2,r] := A * conj(A)[]
-        MPO_tensor = reshape(tmp2,(1,d^i,dR))
+        dR = size(A,3)
+        @tensor tmp2[l,s1,s2,r] := tmp[l,s1,rp] * A[rp,s2,r]
+        tmp = reshape(tmp2,(1,d^i,dR))
     end
     psi = reshape(tmp,d^L)
     return psi

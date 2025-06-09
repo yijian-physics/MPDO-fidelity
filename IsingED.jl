@@ -99,6 +99,52 @@ function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=100,nsweeps = 20)
     return psi
 end
 
+
+
+function J1J2_GS_DMRG(N,J2=0.241167,pbc=true;max_bd=100,nsweeps = 20)
+    sites = siteinds("S=1/2",N)
+    J = 1
+
+    os = OpSum()
+    for j in 1:N-1
+        os += J,"Sx",j,"Sx",j+1
+        os += J,"Sy",j,"Sy",j+1
+        os += J,"Sz",j,"Sz",j+1
+    end
+    for j in 1:N-2
+        os += J2,"Sx",j,"Sx",j+2
+        os += J2,"Sy",j,"Sy",j+2
+        os += J2,"Sz",j,"Sz",j+2
+    end
+    if (pbc)
+        os += J,"Sx",N,"Sx",1
+        os += J,"Sy",N,"Sy",1
+        os += J,"Sz",N,"Sz",1
+        os += J2,"Sx",N-1,"Sx",1
+        os += J2,"Sy",N-1,"Sy",1
+        os += J2,"Sz",N-1,"Sz",1
+        os += J2,"Sx",N,"Sx",2
+        os += J2,"Sy",N,"Sy",2
+        os += J2,"Sz",N,"Sz",2
+    end
+
+    H = MPO(os,sites)
+
+    
+    maxdim = [20,32,64,max_bd] # gradually increase states kept
+    cutoff = [1E-10] # desired truncation error
+    noise = [1E-6,1E-7,1E-8,1E-8,1E-8,0.0]
+    
+    psi0 = randomMPS(sites,10)
+
+    E0,psi0 = dmrg(H,psi0; nsweeps, maxdim, cutoff,noise)
+    E1, psi1 = dmrg(H, [psi0], randomMPS(sites); nsweeps, maxdim, cutoff,noise)
+
+    return psi0, psi1
+end
+
+
+
 function MPS_to_array(psi::MPS)
     N=length(psi)
     As=[];
@@ -120,7 +166,7 @@ function MPS_to_array(psi::MPS)
     end
     As[1]=reshape(As[1],(1,2,2))
     As[end]=reshape(As[end],(2,2,1));
-    As = [convert(Array{Float64,3},A) for A in As];
+    As = [convert(Array{eltype(A),3},A) for A in As];
     return As
 end
 
