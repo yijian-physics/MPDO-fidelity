@@ -75,6 +75,7 @@ end
 
 function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=100,nsweeps = 20)
     sites = siteinds("S=1/2",N)
+    weight = 20*h
 
     os = OpSum()
     for j in 1:N-1
@@ -95,8 +96,21 @@ function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=100,nsweeps = 20)
     
     psi0 = randomMPS(sites,10)
 
-    E0,psi = dmrg(H,psi0; nsweeps, maxdim, cutoff,noise)
-    return psi
+    E0,psi0 = dmrg(H,psi0; nsweeps, maxdim, cutoff,noise)
+    E1, psi1 = dmrg(H, [psi0], randomMPS(sites;linkdims=2); nsweeps, maxdim, cutoff,noise,weight)
+    E2, psi2 = dmrg(H, [psi0, psi1], randomMPS(sites;linkdims=2); nsweeps, maxdim, cutoff,noise,weight)
+
+    # @show inner(psi2,psi0)
+    # @show inner(psi2,psi1)
+
+
+    # M_GS = myMPS(MPS_to_array(psi0));
+    # M_exc1 = myMPS(MPS_to_array(psi1));
+    # M_exc2 = myMPS(MPS_to_array(psi2));
+
+    # println(abs(only(left_environments(M_GS, M_exc2)[end])))
+
+    return psi0, psi1, psi2
 end
 
 
@@ -138,9 +152,9 @@ function J1J2_GS_DMRG(N,J2=0.241167,pbc=true;max_bd=100,nsweeps = 20)
     psi0 = randomMPS(sites,10)
 
     E0,psi0 = dmrg(H,psi0; nsweeps, maxdim, cutoff,noise)
-    E1, psi1 = dmrg(H, [psi0], randomMPS(sites); nsweeps, maxdim, cutoff,noise)
+    # E1, psi1 = dmrg(H, [psi0], randomMPS(sites); nsweeps, maxdim, cutoff,noise)
 
-    return psi0, psi1
+    return psi0
 end
 
 

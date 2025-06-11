@@ -27,6 +27,7 @@ testnorm(M::myMPDO) = findmin([norm(ten) for ten in M.TensorList])[1]
 max_bond_dim(M::myMPDO) = findmax([size(ten,1) for ten in M.TensorList])[1]
 Base.copy(M::myMPDO) = myMPDO([deepcopy(tensor) for tensor in M.TensorList])
 Base.complex(M::myMPDO) = myMPDO(complex.(M.TensorList))
+Base.conj(M::myMPDO) = myMPDO(conj.(M.TensorList))
 
 struct myMPO{T<:Number}
     TensorList::Array{Array{T,4},1} #List of myMPO tensors that represent the MPO
@@ -293,7 +294,7 @@ function unitary_evol_two_site_system(M::myMPDO, U::Matrix, site::Int, dir = "l"
         S2 = S2[1:set_bd]
         U2 = U2[:,1:set_bd]
         V2 = V2[:,1:set_bd]
-        # S2 = S2./norm(S2)  # 2025/5/25
+        S2 = S2./norm(S2)  # 2025/5/25
     end
     if(dir == "l")
         AL = reshape(U2, (DL,d1,d1A,length(S2)))
@@ -343,7 +344,7 @@ function unitary_evol_two_site_ancilla(M::myMPDO, U::Matrix, site::Int, dir = "l
         S2 = S2[1:set_bd]
         U2 = U2[:,1:set_bd]
         V2 = V2[:,1:set_bd]
-        # S2 = S2./norm(S2)  # 2025/5/25
+        S2 = S2./norm(S2)  # 2025/5/25
     end
     if(dir == "l")
         AL = reshape(U2, (DL,d1,d1A,length(S2)))
@@ -364,6 +365,9 @@ end
 
 apply_TM_l(A::Array{<:Number,4},B::Array{<:Number,4},l::Array{<:Number,2})=ncon([A,conj.(B),l],[[4,2,3,-2],[1,2,3,-1],[1,4]])
 apply_TM_r(A::Array{<:Number,4},B::Array{<:Number,4},r::Array{<:Number,2})=ncon([A,conj.(B),r],[[-1,2,3,1],[-2,2,3,4],[1,4]])
+
+apply_TM_l(A::Array{<:Number,3},B::Array{<:Number,3},l::Array{<:Number,2})=ncon([A,conj.(B),l],[[3,2,-2],[1,2,-1],[1,3]])
+
 
 function right_environments(M1::myMPDO,M2::myMPDO)
     ## starting from the right, compute the overlap of <M2|M1> by applying transfer matrices
@@ -400,6 +404,40 @@ function left_environments(M1::myMPDO,M2::myMPDO)
         push!(ls,l)
     end
     return ls
+end
+
+
+function left_environments(A1::myMPS,A2::myMPS)
+    ## starting from the left, compute the overlap of <A2|A1> by applying transfer matrices
+    #     ---A2^*-- -1
+    #    |   |    
+    #     ---A1---- -2
+    N = length(A1)
+    l = diagm(ones(1))
+    ls = Matrix[]
+    push!(ls,l)
+    for i in 1:N
+        A = A1.TensorList[i]
+        B = A2.TensorList[i]
+        l = apply_TM_l(A,B,l)
+        push!(ls,l)
+    end
+    return ls
+end
+
+
+function read_component(A::myMPS, bs::Array)
+    
+    res = diagm(ones(1))
+    N = length(A)
+
+    for i in 1:N
+        tmp = (A.TensorList[i])[:,bs[i],:]
+        res = res * tmp
+    end
+
+    return res
+
 end
 
 
@@ -525,6 +563,50 @@ function add_operator(A::myMPS, Ks::Array,i::Int)
     A_new.TensorList[i] = tmp2
 
     return A_new
+
+end
+
+
+function fidelity_op(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
+
+    rho_op = add_CP(rho, op1, i)
+    rho_op = add_CP(rho_op, op2, j)
+
+    rho1 = MPDO_to_dense(rho);
+    rho2 = MPDO_to_dense(rho_op);
+
+    rho_dense = rho1*rho1'
+    rho_op_dense = rho2*rho2'
+    F0 = compute_fidelity(rho_dense, rho_op_dense)
+
+    return F0
+
+end
+
+
+function fidelity_op_debug(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
+
+    rho_op = add_CP(rho, op1, i)
+    rho_op = add_CP(rho_op, op2, j)
+
+    rho1 = MPDO_to_dense(rho);
+    rho2 = MPDO_to_dense(rho_op);
+
+    rho_dense = rho1*rho1'
+    rho_op_dense = rho2*rho2'
+    F0 = compute_fidelity(rho_dense, rho_op_dense)
+
+    return F0, rho_dense, rho_op_dense
+
+end
+
+
+function fidelity_op_mps(A::myMPS,op1::Array,op2::Array,i::Int,j::Int)
+
+    AS = add_operator(add_operator(A, op1,i), op2, j)
+    F0 = abs(only(left_environments(A, AS)[end]))
+
+    return F0
 
 end
 
@@ -883,10 +965,10 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
 
         if debug == 1
             ## see whether the environment tensor is as expected
-            # l_env_db, r_env_db = check_environment(M1cp, M2cp,i)
-            # println("Error for l_env: ", norm(l_env-l_env_db))
-            # println("Error for r_env: ", norm(r_env-r_env_db))
-            l_env, r_env = check_environment(M1cp, M2cp,i)
+            l_env_db, r_env_db = check_environment(M1cp, M2cp,i)
+            println("Error for l_env: ", norm(l_env-l_env_db))
+            println("Error for r_env: ", norm(r_env-r_env_db))
+            # l_env, r_env = check_environment(M1cp, M2cp,i)
         end
         
         U_env = getU_env(M1cp, M2cp, i, l_env, r_env)
@@ -925,10 +1007,10 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
 
         if debug == 1
             ## see whether the environment tensor is as expected
-            # l_env_db, r_env_db = check_environment(M1cp, M2cp,i)
-            # println("Error for l_env: ", norm(l_env-l_env_db))
-            # println("Error for r_env: ", norm(r_env-r_env_db))
-            l_env, r_env = check_environment(M1cp, M2cp,i)
+            l_env_db, r_env_db = check_environment(M1cp, M2cp,i)
+            println("Error for l_env: ", norm(l_env-l_env_db))
+            println("Error for r_env: ", norm(r_env-r_env_db))
+            # l_env, r_env = check_environment(M1cp, M2cp,i)
         end
         
         U_env = getU_env(M1cp, M2cp, i, l_env, r_env)
@@ -978,10 +1060,10 @@ function optimize_overlap_onefloor(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix};tr
     return M2_interms, ov_opts
 end
 
-function optimize_overlap_sweep_forward_order(M1::myMPDO, M2_interms::Vector{<:myMPDO}; truncation = true, max_bd = 1024, max_err = 1E-10,verbose=1)
+function optimize_overlap_sweep_forward_order(M1::myMPDO, M2_interms::Vector{<:myMPDO}; truncation = true, max_bd = 1024, max_err = 1E-10,verbose=1, debug=0)
     ### M2 interms = [M2, U'_{12}*M2, U'_{23}*M2 ....], U_{12} is the LAST of Us
     ### Direct apply previous method to optimize U_{12}, U_{23} .... (forward order)
-    M1_interms, ov_opts = optimize_overlap_sweep_reverse_order(M2_interms, M1; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+    M1_interms, ov_opts = optimize_overlap_sweep_reverse_order(M2_interms, M1; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose, debug=debug)
     return M1_interms, ov_opts
 end
 
@@ -991,6 +1073,7 @@ function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matr
         
     M1 = canonicalize_right(M1)
     M2 = canonicalize_right(M2)
+    println("Initial overlap: ", compute_overlap(M1, M2))
 
     
     M1_interms = unitary_evolution_two_floor_ancilla(M1, Us; truncation = truncation, max_bd = max_bd, max_err = max_err)
@@ -1025,26 +1108,27 @@ end
 function optimize_overlap_real_nfloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{Vector{Matrix}},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
 
     # M2 is at the top, and M1 is at the bottum
+    M1 = canonicalize_right(M1)
+    M2 = canonicalize_right(M2)
 
     ov_opts = Float64[]
     nfloor = size(Us)[1]
 
     M1_interms = Vector{Vector{myMPDO}}(undef, nfloor)
     M2_interms = Vector{Vector{myMPDO}}(undef, nfloor)
-    M1_mid = Vector{myMPDO}(undef, nfloor)
-    M2_mid = Vector{myMPDO}(undef, nfloor)
+    M1_mid = Vector{myMPDO}(undef, nfloor+1)
+    M2_mid = Vector{myMPDO}(undef, nfloor+1)
     
-    M1_mid[nfloor] = M1
+    M1_mid[nfloor+1] = M1
     M2_mid[1] = M2
 
     for iflr in 1:nfloor
         ind = nfloor + 1 - iflr
-        M1_interms_this = unitary_evolution_two_floor_ancilla(M1_mid[ind], Us[ind]; truncation = truncation, max_bd = max_bd, max_err = max_err)
+        M1_interms_this = unitary_evolution_two_floor_ancilla(M1_mid[ind+1], Us[ind]; truncation = truncation, max_bd = max_bd, max_err = max_err)
         M1_interms[ind] = M1_interms_this
-        if iflr < nfloor
-            M1_mid[ind-1] = copy(M1_interms_this[end])
-        end
+        M1_mid[ind] = copy(M1_interms_this[end])
     end
+    
 
     for k in 1:nsweep
         println("Sweep: $k")
@@ -1053,9 +1137,8 @@ function optimize_overlap_real_nfloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{Vec
             M2_interms_this, ovs = optimize_overlap_sweep_reverse_order(M1_interms[iflr], M2_mid[iflr]; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
             M2_interms[iflr] = M2_interms_this
             push!(ov_opts, ovs...)
-            if iflr < nfloor
-                M2_mid[iflr+1] = copy(M2_interms_this[end])
-            end
+            M2_mid[iflr+1] = copy(M2_interms_this[end])
+
             if iflr == nfloor
                 println("Max bond dim: ", max_bond_dim(M2_interms_this[end]))
             end
@@ -1063,12 +1146,11 @@ function optimize_overlap_real_nfloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{Vec
 
         for iflr in 1:nfloor
             ind = nfloor + 1 - iflr
-            M1_interms_this, ovs = optimize_overlap_sweep_forward_order(M1_mid[ind], M2_interms[ind]; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
+            M1_interms_this, ovs = optimize_overlap_sweep_forward_order(M1_mid[ind+1], M2_interms[ind]; truncation = truncation, max_bd = max_bd, max_err = max_err,verbose=verbose)
             M1_interms[ind] = M1_interms_this
             push!(ov_opts, ovs...)
-            if iflr < nfloor
-                M1_mid[ind-1] = copy(M1_interms_this[end])
-            end
+            M1_mid[ind] = copy(M1_interms_this[end])
+
             if iflr == nfloor
                 println("Max bond dim: ", max_bond_dim(M1_interms_this[end]))
             end
@@ -1080,3 +1162,4 @@ function optimize_overlap_real_nfloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{Vec
     end
     return ov_opts
 end
+
