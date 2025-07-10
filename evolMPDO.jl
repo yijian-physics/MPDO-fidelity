@@ -427,6 +427,8 @@ end
 
 
 function read_component(A::myMPS, bs::Array)
+
+    # Take component of MPS A. 
     
     res = diagm(ones(1))
     N = length(A)
@@ -438,6 +440,18 @@ function read_component(A::myMPS, bs::Array)
 
     return res
 
+end
+
+
+function random_U(d::Int, dt::Float64, N::Int)
+    # without ancilla d=2, with ancilla d=2*da where da is the dimension of ancilla
+    Us = Matrix[]
+    for i in 1:2*N-3
+        H = randn(d*d,d*d) + 1im*randn(d*d,d*d)
+        H = (H+H')/2
+        push!(Us, exp(im*dt*H))
+    end
+    return Us
 end
 
 
@@ -569,6 +583,8 @@ end
 
 function fidelity_op(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
 
+    # compute (rho, O1^i O2^j rho O2'^j O1'^i). Here the input rho is LPDO
+
     rho_op = add_CP(rho, op1, i)
     rho_op = add_CP(rho_op, op2, j)
 
@@ -584,24 +600,10 @@ function fidelity_op(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
 end
 
 
-function fidelity_op_debug(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
-
-    rho_op = add_CP(rho, op1, i)
-    rho_op = add_CP(rho_op, op2, j)
-
-    rho1 = MPDO_to_dense(rho);
-    rho2 = MPDO_to_dense(rho_op);
-
-    rho_dense = rho1*rho1'
-    rho_op_dense = rho2*rho2'
-    F0 = compute_fidelity(rho_dense, rho_op_dense)
-
-    return F0, rho_dense, rho_op_dense
-
-end
-
 
 function fidelity_op_mps(A::myMPS,op1::Array,op2::Array,i::Int,j::Int)
+
+    # compute |<psi|O1^i O2^j|psi>|
 
     AS = add_operator(add_operator(A, op1,i), op2, j)
     F0 = abs(only(left_environments(A, AS)[end]))
@@ -843,30 +845,6 @@ function unitary_evolution_two_floor_ancilla(M::myMPDO, Us::Vector{<:Matrix};tru
     return M1_interms
 end
 
-
-# function MPS_at_middle(M::myMPDO, Us_down::Vector{<:Matrix};truncation = true, max_bd = 1024, max_err=1E-10)
-#     ## Apply a two-floor-unitary Us_down (length 2N-3) on M
-#     ## Us order: U_{12}, U_{23}, ... U{n-1,n} U_{n-2,n-1} ... U_{12} 
-#     ## Assume Right canonical form as input
-#     ## the last one canonical center is at site 2.
-    
-#     N = length(M)
-#     @assert length(Us_down) == 2*N-3  ## This is one-floor constraint
-    
-#     M1cp = copy(M)
-#     for i in 1:N-2  
-#         U = Us_down[i]
-#         site = i;
-#         ~, M1cp = unitary_evol_two_site_ancilla(M1cp, U, site, "l"; truncation = truncation, max_bd = max_bd, max_err = max_err)
-#     end
-#     for i in N-1:2*N-3 
-#         site = 2*N-i-2
-#         U = Us_down[i]
-#         ~, M1cp = unitary_evol_two_site_ancilla(M1cp, U, site, "r"; truncation = truncation, max_bd = max_bd, max_err = max_err)
-#     end
-#     return M1cp
-# end
-
     
 function optimal_U_from_env(U_env::Array{T,4}) where T
     ### maximize |tr(env' * U)|
@@ -926,7 +904,7 @@ function check_environment(M1::myMPDO, M2::myMPDO, site::Int)
         l_env = apply_TM_l(A,B,l_env)
     end
 
-    for i in N:-1:site+2
+    for i in length(M1):-1:site+2
         A = M1.TensorList[i]
         B = M2.TensorList[i]
         r_env = apply_TM_r(A,B,r_env)
@@ -942,6 +920,7 @@ function optimize_overlap_sweep_reverse_order(M1_interms::Vector{<:myMPDO}, M2::
     ### return the M2 intermidates and optimized overlap
     ### Assume M2 is right canonical
     
+    N = length(M1)
     ov_opts = Float64[] #optimized fidelity after applying each optimization
     M2_interms = myMPDO[]
     
@@ -1067,7 +1046,7 @@ function optimize_overlap_sweep_forward_order(M1::myMPDO, M2_interms::Vector{<:m
     return M1_interms, ov_opts
 end
 
-function optimize_overlap_twofloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
+function optimize_overlap_onefloor_sweep(M1::myMPDO,M2::myMPDO,Us::Vector{<:Matrix},nsweep::Int = 1;truncation = true, max_bd = 1024, max_err=1E-10,verbose=1)
     ### Sweep for optimizing Us
     ### Assuming both M1 and M2 are right canonical
         

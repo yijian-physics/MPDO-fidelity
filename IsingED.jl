@@ -73,7 +73,7 @@ function dephasing_X(p::Float64)
     return T
 end
 
-function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=100,nsweeps = 20)
+function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=200,nsweeps = 20)
     sites = siteinds("S=1/2",N)
     weight = 20*h
 
