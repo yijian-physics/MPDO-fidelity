@@ -44,6 +44,22 @@ Base.complex(M::myMPO) = myMPO(complex.(M.TensorList))
 
 ######### Basic functions #########
 
+function myMPDO_to_array(M::myMPDO)
+
+    # bring MPDO to array. 
+    # note the indices are: left bond, system spin, environment spin, right bond
+
+    L = length(M)
+    Ms = Vector{Array{eltype(M.TensorList[1])}}()
+    
+    for i in 1:L
+        push!(Ms, M.TensorList[i])
+    end
+
+    return Ms
+
+end
+
 function product_state_init(T::Type, d::Int, N::Int) 
     ## Initialize a product state |000000>
     ## T - data type
@@ -583,7 +599,7 @@ end
 
 function fidelity_op(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
 
-    # compute (rho, O1^i O2^j rho O2'^j O1'^i). Here the input rho is LPDO
+    # compute (rho, O1^i O2^j rho O2'^j O1'^i). Here the input rho is LPDO (half of MPDO)
 
     rho_op = add_CP(rho, op1, i)
     rho_op = add_CP(rho_op, op2, j)
@@ -597,6 +613,21 @@ function fidelity_op(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
 
     return F0
 
+end
+
+
+function fidelity_exact(rho0::myMPDO, rho1::myMPDO)
+
+    # Here the input rho is LPDO (half of MPDO)
+
+    rho0d = MPDO_to_dense(rho0);
+    rho1d = MPDO_to_dense(rho1);
+
+    rho0_dense = rho0d*rho0d'
+    rho1_dense = rho1d*rho1d'
+    F0 = compute_fidelity(rho0_dense, rho1_dense)
+
+    return F0
 end
 
 
