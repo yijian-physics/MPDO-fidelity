@@ -96,9 +96,9 @@ function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=200,nsweeps = 20)
     
     psi0 = randomMPS(sites,10)
 
-    E0,psi0 = dmrg(H,psi0; nsweeps, maxdim, cutoff,noise)
-    E1, psi1 = dmrg(H, [psi0], randomMPS(sites;linkdims=2); nsweeps, maxdim, cutoff,noise,weight)
-    E2, psi2 = dmrg(H, [psi0, psi1], randomMPS(sites;linkdims=2); nsweeps, maxdim, cutoff,noise,weight)
+    E0,psi0 = dmrg(H,psi0; nsweeps, maxdim, cutoff,noise,outputlevel=0)
+    E1, psi1 = dmrg(H, [psi0], randomMPS(sites;linkdims=2); nsweeps, maxdim, cutoff,noise,weight,outputlevel=0)
+    E2, psi2 = dmrg(H, [psi0, psi1], randomMPS(sites;linkdims=2); nsweeps, maxdim, cutoff,noise,weight,outputlevel=0)
 
     # @show inner(psi2,psi0)
     # @show inner(psi2,psi1)
@@ -184,15 +184,5 @@ function MPS_to_array(psi::MPS)
     return As
 end
 
-function sqrt_mat(A)
-    ## A = Hermitian
-    D,U = eigen((A+A')/2)
-    sqrtA = U * diagm(sqrt.(abs.(D))) * U'
-    return sqrtA
-end
 
-function compute_fidelity(rho1,rho2)
-    S = svdvals(sqrt_mat(rho1)*sqrt_mat(rho2))
-    f = sum(S)
-    return f
-end
+
