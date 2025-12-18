@@ -597,6 +597,27 @@ function add_operator(A::myMPS, Ks::Array,i::Int)
 end
 
 
+function sqrt_mat(A)
+    ## A = Hermitian
+    D,U = eigen((A+A')/2)
+    sqrtA = U * diagm(sqrt.(abs.(D))) * U'
+    return sqrtA
+end
+
+function compute_fidelity(rho1,rho2)
+    S = svdvals(sqrt_mat(rho1)*sqrt_mat(rho2))
+    f = sum(S)
+    return f
+end
+
+
+function compute_trace_distance(rho1,rho2)
+    S = svdvals(rho1-rho2)
+    f = sum(S)/2
+    return f
+end
+
+
 function fidelity_op(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
 
     # compute (rho, O1^i O2^j rho O2'^j O1'^i). Here the input rho is LPDO (half of MPDO)
@@ -616,6 +637,24 @@ function fidelity_op(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
 end
 
 
+function trace_distance_op(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
+    # Here the input rho is LPDO (half of MPDO)
+
+    # compute (rho, O1^i O2^j rho O2'^j O1'^i). Here the input rho is LPDO (half of MPDO)
+
+    rho_op = add_CP(rho, op1, i)
+    rho_op = add_CP(rho_op, op2, j)
+
+    rho1 = MPDO_to_dense(rho);
+    rho2 = MPDO_to_dense(rho_op);
+
+    rho_dense = rho1*rho1'
+    rho_op_dense = rho2*rho2'
+    td = compute_trace_distance(rho_dense, rho_op_dense)
+
+    return td
+end
+
 function fidelity_exact(rho0::myMPDO, rho1::myMPDO)
 
     # Here the input rho is LPDO (half of MPDO)
@@ -629,6 +668,8 @@ function fidelity_exact(rho0::myMPDO, rho1::myMPDO)
 
     return F0
 end
+
+
 
 
 
