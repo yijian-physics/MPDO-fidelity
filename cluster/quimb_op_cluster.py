@@ -52,13 +52,12 @@ def array_to_lpdo(M1, tags):
     return lpdo_1
 
 
-def add_ancilla(lpdo,label):
+def add_ancilla(lpdo, label):
     
-    L = len(lpdo.tensors)
     lpdo_acl = lpdo.copy()
 
-    for i in range(L):
-        prod = qtn.Tensor(np.array([1,0]),inds = (label+f'{i}',),tags = 'A')
+    for i in range(len(lpdo.tensors)):
+        prod = qtn.Tensor(np.array([1,0]), inds = (label+f'{i}',),tags = 'A')
         # prod.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
         
         # like direct product (outer product)
@@ -69,16 +68,15 @@ def add_ancilla(lpdo,label):
 
 ### build unitary circuit
 
-def brickwall_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden = 0,rand = False,start_layer=0,is_acl=0):
+def brickwall_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden = 0,rand = False,start_layer=0,is_acl=0, pbc=True):
 
-    if n_Qbit==0: depth=1
-    if n_Qbit==1: depth=1
+    if n_Qbit==0 or n_Qbit==1: depth=1
 
     for r in range(depth):
 
         if (r+start_layer)%2==0:
             if is_acl==0:
-                for i in range(0, n_Qbit, 2):
+                for i in range(0, n_Qbit-1, 2):
                     # print("U_e", i, i + 1, n_apply)
 
                     if rand == True:
@@ -90,6 +88,12 @@ def brickwall_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden = 0,rand = 
                     psi.gate_(G, (i, i + 1), tags={'U',f'G{n_apply}', f'L{i}D{r}'})
                     list_u3.append(f'G{n_apply}')
                     n_apply+=1
+            
+                # PBC wraparound gate if n_Qbit is even and last qubit not covered
+                if pbc and n_Qbit % 2 == 0 and n_Qbit >= 2:
+                    G = qu.rand_uni(4, dtype=complex) if rand else qu.identity(4,dtype=complex)+qu.rand_uni(4, dtype=complex)*val_iden
+                    psi.gate_(G, (n_Qbit-1, 0), tags={'U',f'G{n_apply}', f'PBC_D{r}'})
+                    list_u3.append(f'G{n_apply}'); n_apply+=1
 
             elif is_acl==1:
                 for i in range(0, n_Qbit, 4):
@@ -102,6 +106,11 @@ def brickwall_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden = 0,rand = 
                     psi.gate_(G, (i, i + 1,i+2,i+3), tags={'U',f'G{n_apply}', f'L{i}D{r}'})
                     list_u3.append(f'G{n_apply}')
                     n_apply+=1
+
+                if pbc and n_Qbit % 4 == 0 and n_Qbit >= 4:
+                    G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                    psi.gate_(G, (n_Qbit-3, n_Qbit-2, n_Qbit-1, 0), tags={'U',f'G{n_apply}', f'PBC_D{r}'})
+                    list_u3.append(f'G{n_apply}'); n_apply+=1
 
         else:
             if is_acl==0:

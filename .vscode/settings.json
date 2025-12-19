@@ -1,2 +1,15 @@
 {
+    "texra.explorer.agentsDirectory": "c:\\Users\\yliu\\OneDrive\\Desktop2022\\agent",
+    "texra.agents": [
+        "chat",
+        "ask",
+        "correct",
+        "polish",
+        "draw",
+        "ocr",
+        "paper2slide",
+        "paper2poster",
+        "transcribe_audio",
+        "derive"
+    ]
 }
