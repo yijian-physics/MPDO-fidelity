@@ -8,6 +8,8 @@ from torch import optim
 import tqdm
 import cotengra as ctg
 
+from file_io import *
+
 # 1. Setup the optimizer
 opti = ctg.ReusableHyperOptimizer(
     progbar=True,
@@ -19,7 +21,7 @@ opti = ctg.ReusableHyperOptimizer(
 
 # 2. Helper Functions
 def read_data(data_name):
-    with h5py.File(data_name + ".h5", "r") as f:
+    with h5py.File("save_results/" + data_name + ".h5", "r") as f:
         keys = sorted(f.keys(), key=lambda x: int(x.split("_")[1]))
         data = [np.transpose(f[key][:], (3,2,1,0)) for key in keys]
     return data
@@ -110,12 +112,13 @@ def brickwall_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden=0, rand=Fal
                     list_u3.append(f'G{n_apply}'); n_apply+=1
     return n_apply, list_u3
 
-def staircase_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden=0, rand=False, start_layer=0, is_acl=0, pbc=True):
+def staircase_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden=0, rand=False, start_layer=0, is_acl=0, pbc=True, icrm=2, icrm_bdy=2):
     """
     Staircase unitary with optional periodic boundary conditions.
     
     Args:
         pbc: If True, add wraparound gates between first and last qubits
+        icrm: increment. For is_acl=1, can be 1 or 2
     """
     if n_Qbit==0 or n_Qbit==1: depth=1
     for r in range(depth):
@@ -135,7 +138,7 @@ def staircase_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden=0, rand=Fal
                     
             elif is_acl == 1:
                 # Forward sweep with 4-qubit gates
-                for i in range(0, n_Qbit-3, 2):
+                for i in range(0, n_Qbit-3, icrm): 
                     G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
                     psi.gate_(G, (i, i+1, i+2, i+3), tags={'U',f'G{n_apply}',f'L{i}D{r}'})
                     list_u3.append(f'G{n_apply}'); n_apply+=1
@@ -143,9 +146,28 @@ def staircase_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden=0, rand=Fal
                 # PBC wraparound for ancilla
                 if pbc and n_Qbit >= 4:
                     # Wraparound connecting last few qubits to first few
+                    if icrm_bdy == 1:
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-3, n_Qbit-2, n_Qbit-1, 0), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
                     G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
                     psi.gate_(G, (n_Qbit-2, n_Qbit-1, 0, 1), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
                     list_u3.append(f'G{n_apply}'); n_apply+=1
+
+                    if icrm_bdy == 1:
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-1, 0, 1, 2), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-2, n_Qbit-1, 0, 1), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-3, n_Qbit-2, n_Qbit-1, 0), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
         else:
             if is_acl == 0:
                 # Backward sweep
@@ -162,19 +184,39 @@ def staircase_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden=0, rand=Fal
                     
             elif is_acl == 1:
                 # Backward sweep with 4-qubit gates
-                for i in range(n_Qbit-1, 2, -2):
+                for i in range(n_Qbit-1, 2, -icrm): 
                     G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
                     psi.gate_(G, (i-3, i-2, i-1, i), tags={'U',f'G{n_apply}',f'L{i}D{r}'})
                     list_u3.append(f'G{n_apply}'); n_apply+=1
                 
                 # PBC wraparound for ancilla backward
                 if pbc and n_Qbit >= 4:
+
+                    if icrm_bdy == 1:
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-1, 0, 1, 2), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
                     G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
-                    psi.gate_(G, (n_Qbit-3, n_Qbit-2, n_Qbit-1, 0), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                    psi.gate_(G, (n_Qbit-2, n_Qbit-1, 0, 1), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
                     list_u3.append(f'G{n_apply}'); n_apply+=1
+
+                    if icrm_bdy == 1:
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-3, n_Qbit-2, n_Qbit-1, 0), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-2, n_Qbit-1, 0, 1), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-1, 0, 1, 2), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
     return n_apply, list_u3
 
-def qmps_f(L=16, in_depth=2, val_iden=0, rand=True, start_layer=0, framework='staircase', is_acl=0, pbc=True):
+def qmps_f(L=16, in_depth=2, val_iden=0, rand=True, start_layer=0, framework='staircase', is_acl=0, pbc=True, icrm=2, icrm_bdy=2):
     """
     Create a parameterized quantum circuit.
     
@@ -199,7 +241,7 @@ def qmps_f(L=16, in_depth=2, val_iden=0, rand=True, start_layer=0, framework='st
     elif framework == 'staircase':
         n_apply, list_u3 = staircase_unitary(psi, n_apply, list_u3, in_depth, L, 
                                              val_iden=val_iden, rand=rand, 
-                                             start_layer=start_layer, is_acl=is_acl, pbc=pbc)
+                                             start_layer=start_layer, is_acl=is_acl, pbc=pbc, icrm=icrm, icrm_bdy=icrm_bdy)
     return psi.astype_('complex128')
 
 def extract_unitary_circuit_acl(psi_pqc, num_qubits):
@@ -249,30 +291,57 @@ def run_single_optimization(model, num_steps=1000, lr=0.01):
     """Original single-start optimization logic."""
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     pbar = tqdm.tqdm(range(num_steps))
+    losses = []
     for step in pbar:
         optimizer.zero_grad()
         loss = model.forward()
+        losses.append(loss.detach().numpy())
         loss.backward()
         optimizer.step()
         pbar.set_description(f"Loss={loss.item():.8f}")
-    return loss.item()
+
+    return min(losses)
 
 
 # 5. PROTECTED MAIN BLOCK
 if __name__ == "__main__":
-    # Load Data
-    M1, M2 = read_data("M1_a2"), read_data("M2_a2")
-    n = len(M1)
-    
-    # Pre-calculate LPDDs (once)
-    l1, l2 = array_to_lpdo(M1, ('M1',)), array_to_lpdo(M2, ('M2',)).H
-    for i in range(n): l2 = l2.reindex({f'e{i}': f'ep{i}'})
-    l1_acl, l2_acl = add_ancilla(l1, "a"), add_ancilla(l2, "ap")
-    for obj in [l1_acl, l2_acl]: 
-        obj.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
 
-    psi_pqc = qmps_f(2*n, 2, is_acl=1, pbc=True)
-    pqc_init = extract_unitary_circuit_acl(psi_pqc, 2*n)
-    pqc_init.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
-    model = TNModel(pqc_init, l1_acl, l2_acl)
-    run_single_optimization(model,num_steps=2000,lr=0.01)
+    # Parameters
+    n = 12
+    sample = 2
+    lr = 0.01
+    num_steps = 2000
+    depth = 2
+    framework = 'staircase'
+    icrm = 2
+    icrm_bdy = 2
+
+    Dir = File_access()
+    loss_save = np.zeros(sample)
+    save_name = "pbcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)+"icrm"+str(icrm)+"icrm_bdy"+str(icrm_bdy)
+
+    for i_sample in range(sample):
+        # Load Data
+        file1 = "M1_a2_N"+str(n)
+        file2 = "M2_a2_N"+str(n)
+        M1, M2 = read_data(file1), read_data(file2)
+        
+        # Pre-calculate LPDDs (once)
+        l1, l2 = array_to_lpdo(M1, ('M1',)), array_to_lpdo(M2, ('M2',)).H
+        for i in range(n): l2 = l2.reindex({f'e{i}': f'ep{i}'})
+        l1_acl, l2_acl = add_ancilla(l1, "a"), add_ancilla(l2, "ap")
+        for obj in [l1_acl, l2_acl]: 
+            obj.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
+
+        # Obtain Unitary Circuit
+        
+        psi_pqc = qmps_f(2*n, depth, framework=framework, is_acl=1, pbc=True, icrm=icrm, icrm_bdy=icrm_bdy)
+        pqc_init = extract_unitary_circuit_acl(psi_pqc, 2*n)
+        pqc_init.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
+        model = TNModel(pqc_init, l1_acl, l2_acl)
+        single_loss = run_single_optimization(model,num_steps=num_steps,lr=lr)
+        loss_save[i_sample] = single_loss
+        Dir.save_data(loss_save, save_name)
+
+    test = Dir.get_back(save_name)
+    print(test)
