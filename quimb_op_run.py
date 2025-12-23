@@ -99,9 +99,11 @@ if __name__ == "__main__":
         lr = 0.01
         num_steps = 2000
         sample = 1
-        N = 10
-        file1 = "M1_a0_Xnoise_p03_N"+str(N)
-        file2 = "M1_a2_Xnoise_p03_N"+str(N)
+        N = 12
+        # file1 = "M1_a0_Xnoise_p03_N"+str(N)
+        # file2 = "M1_a2_Xnoise_p03_N"+str(N)
+        file1 = "M1_a2_N"+str(N)
+        file2 = "M2_a2_N"+str(N)
         framework = 'staircase'
         depth = 2
 

@@ -9,6 +9,7 @@ import tqdm
 import cotengra as ctg
 
 from file_io import *
+from time import time
 
 # 1. Setup the optimizer
 opti = ctg.ReusableHyperOptimizer(
@@ -146,16 +147,17 @@ def staircase_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden=0, rand=Fal
                 # PBC wraparound for ancilla
                 if pbc and n_Qbit >= 4:
                     # Wraparound connecting last few qubits to first few
-                    if icrm_bdy == 1:
-                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
-                        psi.gate_(G, (n_Qbit-3, n_Qbit-2, n_Qbit-1, 0), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
-                        list_u3.append(f'G{n_apply}'); n_apply+=1
 
                     G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
-                    psi.gate_(G, (n_Qbit-2, n_Qbit-1, 0, 1), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                    psi.gate_(G, (n_Qbit-3, n_Qbit-2, n_Qbit-1, 0), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
                     list_u3.append(f'G{n_apply}'); n_apply+=1
 
+
                     if icrm_bdy == 1:
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-2, n_Qbit-1, 0, 1), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
                         G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
                         psi.gate_(G, (n_Qbit-1, 0, 1, 2), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
                         list_u3.append(f'G{n_apply}'); n_apply+=1
@@ -192,16 +194,15 @@ def staircase_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden=0, rand=Fal
                 # PBC wraparound for ancilla backward
                 if pbc and n_Qbit >= 4:
 
-                    if icrm_bdy == 1:
-                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
-                        psi.gate_(G, (n_Qbit-1, 0, 1, 2), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
-                        list_u3.append(f'G{n_apply}'); n_apply+=1
-
                     G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
-                    psi.gate_(G, (n_Qbit-2, n_Qbit-1, 0, 1), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                    psi.gate_(G, (n_Qbit-1, 0, 1, 2), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
                     list_u3.append(f'G{n_apply}'); n_apply+=1
 
                     if icrm_bdy == 1:
+                        G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
+                        psi.gate_(G, (n_Qbit-2, n_Qbit-1, 0, 1), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
+                        list_u3.append(f'G{n_apply}'); n_apply+=1
+
                         G = qu.rand_uni(16, dtype=complex) if rand else qu.identity(16,dtype=complex)+qu.rand_uni(16, dtype=complex)*val_iden
                         psi.gate_(G, (n_Qbit-3, n_Qbit-2, n_Qbit-1, 0), tags={'U',f'G{n_apply}',f'PBC_D{r}'})
                         list_u3.append(f'G{n_apply}'); n_apply+=1
@@ -307,23 +308,28 @@ def run_single_optimization(model, num_steps=1000, lr=0.01):
 if __name__ == "__main__":
 
     # Parameters
-    n = 12
-    sample = 2
+    n = 8
+    sample = 1
     lr = 0.01
-    num_steps = 2000
+    num_steps =4000
     depth = 2
     framework = 'staircase'
     icrm = 2
     icrm_bdy = 2
+    pbc = True
+
+    start_time = time()
 
     Dir = File_access()
     loss_save = np.zeros(sample)
-    save_name = "pbcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)+"icrm"+str(icrm)+"icrm_bdy"+str(icrm_bdy)
+    save_name = "pbccodeN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)+"icrm"+str(icrm)+"icrm_bdy"+str(icrm_bdy)
 
     for i_sample in range(sample):
         # Load Data
-        file1 = "M1_a2_N"+str(n)
-        file2 = "M2_a2_N"+str(n)
+        # file1 = "M1_a2_N"+str(n)
+        # file2 = "M2_a2_N"+str(n)
+        file1 = "M1_a0_Xnoise_p03_N"+str(n)
+        file2 = "M1_a2_Xnoise_p03_N"+str(n)
         M1, M2 = read_data(file1), read_data(file2)
         
         # Pre-calculate LPDDs (once)
@@ -335,13 +341,15 @@ if __name__ == "__main__":
 
         # Obtain Unitary Circuit
         
-        psi_pqc = qmps_f(2*n, depth, framework=framework, is_acl=1, pbc=True, icrm=icrm, icrm_bdy=icrm_bdy)
+        psi_pqc = qmps_f(2*n, depth, framework=framework, is_acl=1, pbc=pbc, icrm=icrm, icrm_bdy=icrm_bdy)
         pqc_init = extract_unitary_circuit_acl(psi_pqc, 2*n)
         pqc_init.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
         model = TNModel(pqc_init, l1_acl, l2_acl)
         single_loss = run_single_optimization(model,num_steps=num_steps,lr=lr)
         loss_save[i_sample] = single_loss
         Dir.save_data(loss_save, save_name)
+
+    print("running time: ", time()-start_time)
 
     test = Dir.get_back(save_name)
     print(test)

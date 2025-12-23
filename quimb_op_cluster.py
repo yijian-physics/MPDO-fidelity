@@ -21,7 +21,7 @@ opti = ctg.ReusableHyperOptimizer(
 ### read data
 
 def read_data(data_name):
-    with h5py.File("save_results/" + data_name + ".h5", "r") as f:
+    with h5py.File("../save_results/" + data_name + ".h5", "r") as f:
         keys = sorted(f.keys(), key=lambda x: int(x.split("_")[1]))
         # print(keys)
         data = [np.transpose(f[key][:], (3,2,1,0)) for key in keys]
