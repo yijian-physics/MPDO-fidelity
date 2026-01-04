@@ -8,6 +8,7 @@ import torch
 from torch import optim
 import tqdm
 import cotengra as ctg
+import sys
 
 from file_io import *
 
@@ -22,7 +23,7 @@ opti = ctg.ReusableHyperOptimizer(
 
 # 2. Helper Functions
 def read_data(data_name):
-    with h5py.File("save_results/save_results/" + data_name + ".h5", "r") as f:
+    with h5py.File("save_results/" + data_name + ".h5", "r") as f:
         keys = sorted(f.keys(), key=lambda x: int(x.split("_")[1]))
         data = [np.transpose(f[key][:], (3,2,1,0)) for key in keys]
     return data
@@ -346,27 +347,37 @@ def run_single_optimization(model, num_steps=1000, lr=0.01, lr_schedule='custom_
 # 5. PROTECTED MAIN BLOCK
 if __name__ == "__main__":
 
-    # Parameters
-    n = 12
+    # -------- Parameters ------------------#
+    n = int(sys.argv[1])  # argument
     sample = 3
     lr = 0.002
-    num_steps = 10000
-    depth = 4
+    num_steps =4000
+    depth = 2*int(sys.argv[2])  # argument
     framework = 'staircase'
     icrm = 2
     icrm_bdy = 2
     pbc = False
+    info = ""  # for example, code, p03, etc
+
+    #file1 = "M1_a2_N"+str(n)
+    #file2 = "M2_a2_N"+str(n)
+    #file1 = "M1_a0_Xnoise_p03_N"+str(n)
+    #file2 = "M1_a2_Xnoise_p03_N"+str(n)
+    file1 = "M1_a2_Znoise_p03_N"+str(n)
+    file2 = "M2_a2_Znoise_p03_N"+str(n)
+    #-----------------------------------------#
+    if pbc == True:
+        print("pbc_optimization, N: ", n)
+        save_name = info+"pbcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)+"icrm"+str(icrm)+"icrm_bdy"+str(icrm_bdy)
+    elif pbc == False:
+        print("obc_optimization, N: ", n)
+        save_name = info+"obcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
 
     Dir = File_access()
     loss_save = np.zeros(sample)
-    save_name = "pbcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)+"icrm"+str(icrm)+"icrm_bdy"+str(icrm_bdy)
-
+    
     for i_sample in range(sample):
         # Load Data
-        #file1 = "M1_a2_N"+str(n)
-        #file2 = "M2_a2_N"+str(n)
-        file1 = "M1_a2_Znoise_p03_N"+str(n)
-        file2 = "M2_a2_Znoise_p03_N"+str(n)
         M1, M2 = read_data(file1), read_data(file2)
         
         # Pre-calculate LPDDs (once)
