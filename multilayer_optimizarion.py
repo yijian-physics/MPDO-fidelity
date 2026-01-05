@@ -15,11 +15,12 @@ from file_io import *
 
 class ModelPara:
     
-    def __init__(self,framework, depth, pbc, is_acl):
+    def __init__(self,framework, depth, pbc, is_acl, is_td):
         self.framework = framework
         self.depth = depth
         self.pbc = pbc
         self.is_acl = is_acl
+        self.is_td = is_td
 
 
 class OptimizePara:
@@ -74,6 +75,36 @@ def add_ancilla(lpdo, label):
         prod = qtn.Tensor(np.array([1,0]), inds=(label+f'{i}',), tags='A')
         lpdo_acl = lpdo_acl & prod
     return lpdo_acl
+
+
+    
+
+
+def get_lpdo_torch(M1, M2, model_para, is_td=0):
+
+    n = len(M1)
+
+    if is_td == 0:
+        l1, l2 = array_to_lpdo(M1, ('M1',)), array_to_lpdo(M2, ('M2',)).H
+        for i in range(n): l2 = l2.reindex({f'e{i}': f'ep{i}'})
+        if model_para.is_acl == 1:
+            l1_in, l2_in = add_ancilla(l1, "a"), add_ancilla(l2, "ap")
+        else:
+            l1_in, l2_in = l1, l2
+
+    elif is_td == 1:
+        l1, l2 = array_to_lpdo(M1, ('M1',)), array_to_lpdo(M2, ('M2',))
+        if model_para.is_acl == 1:
+            l1_in, l2_in = add_ancilla(l1, "a"), add_ancilla(l2, "a")
+        else:
+            l1_in, l2_in = l1, l2
+
+    for obj in [l1_in, l2_in]: 
+        obj.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
+
+    return l1_in, l2_in
+
+##
 
 def brickwall_unitary(psi, n_apply, list_u3, depth, n_Qbit, val_iden=0, rand=False, start_layer=0, is_acl=0, pbc=True):
     """
@@ -292,24 +323,66 @@ def extract_unitary_circuit(psi_pqc, num_qubits, is_td=0):
     return pqc
 
 
-def extract_unitary_circuit_acl(psi_pqc, num_qubits):
+def extract_unitary_circuit_acl(psi_pqc, num_qubits, is_td=0):
+    # for ancilla. num_qubits = 2*n
+    # is_td: is trace distance
+
     pqc = psi_pqc.tensors[num_qubits]
-    for i in range(num_qubits+1, len(psi_pqc.tensors)):
-        pqc = pqc & psi_pqc.tensors[i]
-    for i in range(num_qubits):
-        suffix = 'e' if i%2 else 'a'
-        pqc = pqc.reindex({f'k{i}': f'{suffix}{i//2}', psi_pqc.tensors[i].inds[-1]: f'{suffix}p{i//2}'})
+    for i in range (num_qubits+1,len(psi_pqc.tensors)):
+        pqc = pqc&psi_pqc.tensors[i] #extrating the circuit part
+
+    for i in range (num_qubits):
+        if (i%2):
+            if is_td == 0:
+                pqc = pqc.reindex({f'k{i}':f'e{i//2}'})
+                pqc = pqc.reindex({psi_pqc.tensors[i].inds[-1]:f'ep{i//2}'})
+            elif is_td == 1:
+                pqc = pqc.reindex({f'k{i}':f's{i//2}'})
+                pqc = pqc.reindex({psi_pqc.tensors[i].inds[-1]:f'sp{i//2}'})
+        else:
+            pqc = pqc.reindex({f'k{i}':f'a{i//2}'})
+            pqc = pqc.reindex({psi_pqc.tensors[i].inds[-1]:f'ap{i//2}'})
+
     return pqc
+
 
 def full_contraction(pqc, lpdo_1, lpdo_2):
     return -abs((lpdo_1 & lpdo_2 & pqc).contract(optimize=opti))
 
 
+
+def full_contraction_td(pqc, lpdo_1, lpdo_2, is_acl, is_show=0):
+    # for trace distance
+
+    if is_show == 1:
+        (lpdo_1_conj & lpdo_1 & pqc).draw(['U','M2','M1'])
+
+    lpdo_1_conj = lpdo_1.H
+    lpdo_2_conj = lpdo_2.H
+
+    for i in range(n):
+        lpdo_1_conj = lpdo_1_conj.reindex({f's{i}':f'sp{i}'})
+        lpdo_2_conj = lpdo_2_conj.reindex({f's{i}':f'sp{i}'})
+        if is_acl == 1:
+            lpdo_1_conj = lpdo_1_conj.reindex({f'a{i}':f'ap{i}'})
+            lpdo_2_conj = lpdo_2_conj.reindex({f'a{i}':f'ap{i}'})
+                
+    for obj in [lpdo_1, lpdo_2, lpdo_1_conj, lpdo_2_conj]: 
+        obj.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
+
+    ov1 = (lpdo_1_conj & lpdo_1 & pqc).contract(optimize=opti)
+    ov2 = (lpdo_2_conj & lpdo_2 & pqc).contract(optimize=opti)
+    
+    dist = (1/2)*(torch.abs(ov1-ov2))
+    return -dist
+
+
 # 3. Non-Redundant and Picklable Model
 class TNModel(torch.nn.Module):
-    def __init__(self, pqc, lpdo_1, lpdo_2):
+    def __init__(self, pqc, lpdo_1, lpdo_2,model_para):
         super().__init__()
         self.lpdo_1, self.lpdo_2 = lpdo_1, lpdo_2
+        self.is_acl, self.is_td = model_para.is_acl, model_para.is_td
         params, self.skeleton = qtn.pack(pqc)
         self.torch_params, self.param_metadata = torch.nn.ParameterDict(), {}
         for i, initial in params.items():
@@ -333,7 +406,12 @@ class TNModel(torch.nn.Module):
 
     def forward(self):
         pqc = qtn.unpack(self._get_complex_generators(), self.skeleton)
-        return full_contraction(pqc.isometrize(method='exp'), self.lpdo_1, self.lpdo_2)
+        if self.is_td == 0:
+            return full_contraction(pqc.isometrize(method='exp'), self.lpdo_1, self.lpdo_2)
+        else:
+            return full_contraction_td(pqc.isometrize(method='exp'), self.lpdo_1, self.lpdo_2, self.is_acl)
+    
+
 
 # 4. Optimization Functions
 def run_single_optimization(model, num_steps=1000, lr=0.01, lr_schedule='custom_step'):
@@ -394,14 +472,7 @@ def optimization(file1, file2, model_para, optimize_para, save_name="test"):
         M1, M2 = read_data(file1), read_data(file2)
         
         # Pre-calculate LPDDs (once)
-        l1, l2 = array_to_lpdo(M1, ('M1',)), array_to_lpdo(M2, ('M2',)).H
-        for i in range(n): l2 = l2.reindex({f'e{i}': f'ep{i}'})
-        if model_para.is_acl == 1:
-            l1_in, l2_in = add_ancilla(l1, "a"), add_ancilla(l2, "ap")
-        else:
-            l1_in, l2_in = l1, l2
-        for obj in [l1_in, l2_in]: 
-            obj.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
+        l1_in, l2_in = get_lpdo_torch(M1, M2, model_para, is_td = model_para.is_td)
 
         # Obtain Unitary Circuit
         N_qb = 2*n if model_para.is_acl == 1 else n
@@ -409,12 +480,12 @@ def optimization(file1, file2, model_para, optimize_para, save_name="test"):
         psi_pqc = qmps_f(N_qb, model_para.depth, framework=model_para.framework, is_acl=model_para.is_acl, 
                          pbc=model_para.pbc)
         if model_para.is_acl == 1:
-            pqc_init = extract_unitary_circuit_acl(psi_pqc, N_qb)
+            pqc_init = extract_unitary_circuit_acl(psi_pqc, N_qb,is_td=model_para.is_td)
         else:
-            pqc_init = extract_unitary_circuit(psi_pqc, N_qb)
+            pqc_init = extract_unitary_circuit(psi_pqc, N_qb,is_td=model_para.is_td)
 
         pqc_init.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
-        model = TNModel(pqc_init, l1_in, l2_in)
+        model = TNModel(pqc_init, l1_in, l2_in, model_para)
         single_loss = run_single_optimization(model,num_steps=optimize_para.num_steps,lr=optimize_para.lr)
         loss_save[i_sample] = single_loss
         Dir.save_data(loss_save, save_name)
@@ -426,22 +497,26 @@ def optimization(file1, file2, model_para, optimize_para, save_name="test"):
 if __name__ == "__main__":
 
     # -------- Parameters ------------------#
-    n = int(sys.argv[1])  # argument
+    # n = int(sys.argv[1])  # argument
+    n = 14
     sample = 1
     lr = 0.002
-    num_steps =10000
-    depth = 2*int(sys.argv[2])  # argument
+    num_steps =2000
+    # depth = 2*int(sys.argv[2])  # argument
+    depth = 2
     framework = 'staircase'
     pbc = False
-    is_acl = 0
-    info = "woa_p03"  # for example, code, p03, etc
+    is_acl = 1
+    is_td = 1  # trace distance
+    info = "test"  # for example, codeX, p03, td, etc
 
-    #file1 = "M1_a2_N"+str(n)
-    #file2 = "M2_a2_N"+str(n)
+
+    file1 = "M1_a2_N"+str(n)
+    file2 = "M2_a2_N"+str(n)
     #file1 = "M1_a0_Xnoise_p03_N"+str(n)
     #file2 = "M1_a2_Xnoise_p03_N"+str(n)
-    file1 = "M1_a2_Znoise_p03_N"+str(n)
-    file2 = "M2_a2_Znoise_p03_N"+str(n)
+    # file1 = "M1_a2_Znoise_p03_N"+str(n)
+    # file2 = "M2_a2_Znoise_p03_N"+str(n)
     #-----------------------------------------#
     if pbc == True:
         print("pbc_optimization, N: ", n)
@@ -450,7 +525,7 @@ if __name__ == "__main__":
         print("obc_optimization, N: ", n)
         save_name = info+"obcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
 
-    model_para = ModelPara(framework, depth, pbc, is_acl)
+    model_para = ModelPara(framework, depth, pbc, is_acl, is_td)
     optimize_para = OptimizePara(lr, num_steps, sample)
     optimization(file1, file2, model_para, optimize_para, save_name=save_name)
     
