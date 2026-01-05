@@ -12,6 +12,24 @@ import sys
 
 from file_io import *
 
+
+class ModelPara:
+    
+    def __init__(self,framework, depth, pbc, is_acl):
+        self.framework = framework
+        self.depth = depth
+        self.pbc = pbc
+        self.is_acl = is_acl
+
+
+class OptimizePara:
+    
+    def __init__(self,lr, num_steps, sample):
+        self.lr = lr
+        self.num_steps = num_steps
+        self.sample = sample
+
+
 # 1. Setup the optimizer
 opti = ctg.ReusableHyperOptimizer(
     progbar=True,
@@ -252,6 +270,28 @@ def qmps_f(L=16, in_depth=2, val_iden=0, rand=True, start_layer=0, framework='st
                                              start_layer=start_layer, is_acl=is_acl, pbc=pbc, icrm=icrm, icrm_bdy=icrm_bdy)
     return psi.astype_('complex128')
 
+
+def extract_unitary_circuit(psi_pqc, num_qubits, is_td=0):
+    # only system qubits
+    # is_td: is trace distance
+
+    pqc = psi_pqc.tensors[num_qubits]
+    for i in range (num_qubits+1,len(psi_pqc.tensors)):
+        pqc = pqc&psi_pqc.tensors[i] #extrating the circuit part
+
+    if is_td == 0:
+        for i in range (num_qubits):
+            pqc = pqc.reindex({f'k{i}':f'e{i}'})
+            pqc = pqc.reindex({psi_pqc.tensors[i].inds[-1]:f'ep{i}'})
+    
+    elif is_td == 1:
+        for i in range (num_qubits):
+            pqc = pqc.reindex({f'k{i}':f's{i}'})
+            pqc = pqc.reindex({psi_pqc.tensors[i].inds[-1]:f'sp{i}'})
+
+    return pqc
+
+
 def extract_unitary_circuit_acl(psi_pqc, num_qubits):
     pqc = psi_pqc.tensors[num_qubits]
     for i in range(num_qubits+1, len(psi_pqc.tensors)):
@@ -263,6 +303,7 @@ def extract_unitary_circuit_acl(psi_pqc, num_qubits):
 
 def full_contraction(pqc, lpdo_1, lpdo_2):
     return -abs((lpdo_1 & lpdo_2 & pqc).contract(optimize=opti))
+
 
 # 3. Non-Redundant and Picklable Model
 class TNModel(torch.nn.Module):
@@ -344,20 +385,56 @@ def run_single_optimization(model, num_steps=1000, lr=0.01, lr_schedule='custom_
     return min(losses)
 
 
+def optimization(file1, file2, model_para, optimize_para, save_name="test"):
+    Dir = File_access()
+    loss_save = np.zeros(optimize_para.sample)
+    
+    for i_sample in range(optimize_para.sample):
+        # Load Data
+        M1, M2 = read_data(file1), read_data(file2)
+        
+        # Pre-calculate LPDDs (once)
+        l1, l2 = array_to_lpdo(M1, ('M1',)), array_to_lpdo(M2, ('M2',)).H
+        for i in range(n): l2 = l2.reindex({f'e{i}': f'ep{i}'})
+        if model_para.is_acl == 1:
+            l1_in, l2_in = add_ancilla(l1, "a"), add_ancilla(l2, "ap")
+        else:
+            l1_in, l2_in = l1, l2
+        for obj in [l1_in, l2_in]: 
+            obj.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
+
+        # Obtain Unitary Circuit
+        N_qb = 2*n if model_para.is_acl == 1 else n
+        
+        psi_pqc = qmps_f(N_qb, model_para.depth, framework=model_para.framework, is_acl=model_para.is_acl, 
+                         pbc=model_para.pbc)
+        if model_para.is_acl == 1:
+            pqc_init = extract_unitary_circuit_acl(psi_pqc, N_qb)
+        else:
+            pqc_init = extract_unitary_circuit(psi_pqc, N_qb)
+
+        pqc_init.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
+        model = TNModel(pqc_init, l1_in, l2_in)
+        single_loss = run_single_optimization(model,num_steps=optimize_para.num_steps,lr=optimize_para.lr)
+        loss_save[i_sample] = single_loss
+        Dir.save_data(loss_save, save_name)
+
+    return 0
+
+
 # 5. PROTECTED MAIN BLOCK
 if __name__ == "__main__":
 
     # -------- Parameters ------------------#
     n = int(sys.argv[1])  # argument
-    sample = 3
+    sample = 1
     lr = 0.002
-    num_steps =4000
+    num_steps =10000
     depth = 2*int(sys.argv[2])  # argument
     framework = 'staircase'
-    icrm = 2
-    icrm_bdy = 2
     pbc = False
-    info = ""  # for example, code, p03, etc
+    is_acl = 0
+    info = "woa_p03"  # for example, code, p03, etc
 
     #file1 = "M1_a2_N"+str(n)
     #file2 = "M2_a2_N"+str(n)
@@ -368,34 +445,15 @@ if __name__ == "__main__":
     #-----------------------------------------#
     if pbc == True:
         print("pbc_optimization, N: ", n)
-        save_name = info+"pbcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)+"icrm"+str(icrm)+"icrm_bdy"+str(icrm_bdy)
+        save_name = info+"pbcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
     elif pbc == False:
         print("obc_optimization, N: ", n)
         save_name = info+"obcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
 
-    Dir = File_access()
-    loss_save = np.zeros(sample)
+    model_para = ModelPara(framework, depth, pbc, is_acl)
+    optimize_para = OptimizePara(lr, num_steps, sample)
+    optimization(file1, file2, model_para, optimize_para, save_name=save_name)
     
-    for i_sample in range(sample):
-        # Load Data
-        M1, M2 = read_data(file1), read_data(file2)
-        
-        # Pre-calculate LPDDs (once)
-        l1, l2 = array_to_lpdo(M1, ('M1',)), array_to_lpdo(M2, ('M2',)).H
-        for i in range(n): l2 = l2.reindex({f'e{i}': f'ep{i}'})
-        l1_acl, l2_acl = add_ancilla(l1, "a"), add_ancilla(l2, "ap")
-        for obj in [l1_acl, l2_acl]: 
-            obj.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
-
-        # Obtain Unitary Circuit
-        
-        psi_pqc = qmps_f(2*n, depth, framework=framework, is_acl=1, pbc=pbc, icrm=icrm, icrm_bdy=icrm_bdy)
-        pqc_init = extract_unitary_circuit_acl(psi_pqc, 2*n)
-        pqc_init.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
-        model = TNModel(pqc_init, l1_acl, l2_acl)
-        single_loss = run_single_optimization(model,num_steps=num_steps,lr=lr)
-        loss_save[i_sample] = single_loss
-        Dir.save_data(loss_save, save_name)
-
+    Dir = File_access()
     test = Dir.get_back(save_name)
     print(test)
