@@ -10,6 +10,7 @@ import cotengra as ctg
 
 from file_io import *
 from time import time
+import sys
 
 # 1. Setup the optimizer
 opti = ctg.ReusableHyperOptimizer(
@@ -301,14 +302,14 @@ def run_single_optimization(model, num_steps=1000, lr=0.01):
         optimizer.step()
         pbar.set_description(f"Loss={loss.item():.8f}")
 
-    return min(losses)
+    return losses
 
 
 # 5. PROTECTED MAIN BLOCK
 if __name__ == "__main__":
 
-    # Parameters
-    n = 8
+    # -------- Parameters ------------------#
+    n = int(sys.argv[1])  # argument
     sample = 1
     lr = 0.01
     num_steps =4000
@@ -317,19 +318,28 @@ if __name__ == "__main__":
     icrm = 2
     icrm_bdy = 2
     pbc = True
+    info = ""  # for example, code, p03, etc
+
+    file1 = "M1_a2_N"+str(n)
+    file2 = "M2_a2_N"+str(n)
+    #file1 = "M1_a0_Xnoise_p03_N"+str(n)
+    #file2 = "M1_a2_Xnoise_p03_N"+str(n)
+    #file1 = "M1_a2_Znoise_p03_N"+str(n)
+    #file2 = "M2_a2_Znoise_p03_N"+str(n)
+    #-----------------------------------------#
+    if pbc == True:
+        print("pbc_optimization, N: ", n)
+        save_name = info+"pbcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)+"icrm"+str(icrm)+"icrm_bdy"+str(icrm_bdy)
+    elif pbc == False:
+        print("obc_optimization, N: ", n)
+        save_name = info+"obcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
 
     start_time = time()
-
     Dir = File_access()
     loss_save = np.zeros(sample)
-    save_name = "pbccodeN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)+"icrm"+str(icrm)+"icrm_bdy"+str(icrm_bdy)
 
     for i_sample in range(sample):
         # Load Data
-        # file1 = "M1_a2_N"+str(n)
-        # file2 = "M2_a2_N"+str(n)
-        file1 = "M1_a0_Xnoise_p03_N"+str(n)
-        file2 = "M1_a2_Xnoise_p03_N"+str(n)
         M1, M2 = read_data(file1), read_data(file2)
         
         # Pre-calculate LPDDs (once)
@@ -346,8 +356,10 @@ if __name__ == "__main__":
         pqc_init.apply_to_arrays(lambda x: torch.tensor(x, dtype=torch.complex128))
         model = TNModel(pqc_init, l1_acl, l2_acl)
         single_loss = run_single_optimization(model,num_steps=num_steps,lr=lr)
-        loss_save[i_sample] = single_loss
+        loss_save[i_sample] = min(single_loss)
         Dir.save_data(loss_save, save_name)
+
+    # print(single_loss)
 
     print("running time: ", time()-start_time)
 

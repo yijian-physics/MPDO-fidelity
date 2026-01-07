@@ -87,7 +87,7 @@ def optimize(file1, file2, model_para, optimize_para, save_name="test",is_mute=1
 
 if __name__ == "__main__":
 
-    task = 'read'
+    task = 'run'
 
     if task == 'run':
 
@@ -95,12 +95,12 @@ if __name__ == "__main__":
 
         lr = 0.01
         num_steps = 2000
-        sample = 2
-        N = 8
-        file1 = "M1_a2_N"+str(N)
-        file2 = "M2_a2_N"+str(N)
+        sample = 1
+        N = 6
+        file1 = "M1_a0_Xnoise_p03_N"+str(N)
+        file2 = "M1_a2_Xnoise_p03_N"+str(N)
         framework = 'staircase'
-        depth = 4
+        depth = 2
 
         model_para = ModelPara(framework, depth)
         optimize_para = OptimizePara(lr, num_steps, sample)

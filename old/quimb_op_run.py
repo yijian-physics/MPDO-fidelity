@@ -29,11 +29,10 @@ class OptimizePara:
         self.sample = sample
 
 
-def build_model(file1, file2, model_para):
+def build_model(file1, file2, model_para,is_acl=1):
     M1 = read_data(file1)
     M2 = read_data(file2)
     n = len(M1)
-    is_acl = 1
     rand = True
     val_iden = 0.0
 
@@ -54,14 +53,14 @@ def build_model(file1, file2, model_para):
     return model
 
 
-def optimize(file1, file2, model_para, optimize_para, save_name="test",is_mute=1):
+def optimize(file1, file2, model_para, optimize_para, save_name="test",is_mute=1,is_acl=1):
 
     Dir = File_access()
     loss_save = np.zeros(optimize_para.sample)
 
     for i_sample in range(optimize_para.sample):
 
-        model = build_model(file1, file2, model_para)
+        model = build_model(file1, file2, model_para,is_acl=is_acl)
         optimizer = optim.Adam(model.parameters(), lr=optimize_para.lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer,step_size=200, gamma=0.5)
         pbar = tqdm.tqdm(range(optimize_para.num_steps), disable=is_mute)
@@ -84,7 +83,6 @@ def optimize(file1, file2, model_para, optimize_para, save_name="test",is_mute=1
         loss_save[i_sample] = min(losses)
         Dir.save_data(loss_save, save_name)
 
-
     return 0
 
 
@@ -97,31 +95,41 @@ if __name__ == "__main__":
         start_time = time()
 
         lr = 0.01
-        num_steps = 2000
+        num_steps = 4000
         sample = 1
-        N = 12
+        N = 10
         # file1 = "M1_a0_Xnoise_p03_N"+str(N)
         # file2 = "M1_a2_Xnoise_p03_N"+str(N)
-        file1 = "M1_a2_N"+str(N)
-        file2 = "M2_a2_N"+str(N)
+        #file1 = "M1_a2_h0p9_N"+str(N)
+        #file2 = "M2_a2_h0p9_N"+str(N)
+        file1 = "M1_a2_Znoise_p03_N"+str(N)
+        file2 = "M2_a2_Znoise_p03_N"+str(N)
         framework = 'staircase'
         depth = 2
+        is_acl = 0
 
         model_para = ModelPara(framework, depth)
         optimize_para = OptimizePara(lr, num_steps, sample)
 
-        save_name = "N"+str(N)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
-        optimize(file1, file2, model_para, optimize_para, save_name=save_name, is_mute=0)
+        print("quimb_op_run: system size: ", N)
+
+        save_name = "obccodeX2"+"N"+str(N)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
+        optimize(file1, file2, model_para, optimize_para, save_name=save_name, is_mute=0,is_acl=is_acl)
 
         print("running time: ", time()-start_time)
 
         Dir = File_access()
         test = Dir.get_back(save_name)
         print(test)
+        print(min(test))
+
     
     elif task == 'read':
 
-        save_name = "N14lr0.01num_steps6000sample120staircasedepth2"
+        # save_name = "N14lr0.01num_steps6000sample120staircasedepth2"
+        # save_name = "pbccodeXN18lr0.01num_steps4000sample50staircasedepth2icrm2icrm_bdy2"
+        save_name = "h1p1N12lr0.01num_steps2000sample50staircasedepth2"
+        # save_name = "td_N8lr0.01num_steps2000sample30staircasedepth2"
         Dir = File_access()
         test = Dir.get_back(save_name)
         print(test)
