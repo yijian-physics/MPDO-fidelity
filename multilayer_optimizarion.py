@@ -498,12 +498,12 @@ if __name__ == "__main__":
 
     # -------- Parameters ------------------#
     # n = int(sys.argv[1])  # argument
-    n = 14
+    n = 6
     sample = 1
-    lr = 0.002
+    lr = 0.01
     num_steps =2000
     # depth = 2*int(sys.argv[2])  # argument
-    depth = 2
+    depth = 6
     framework = 'staircase'
     pbc = False
     is_acl = 1
@@ -511,12 +511,12 @@ if __name__ == "__main__":
     info = "test"  # for example, codeX, p03, td, etc
 
 
-    file1 = "M1_a2_N"+str(n)
-    file2 = "M2_a2_N"+str(n)
-    #file1 = "M1_a0_Xnoise_p03_N"+str(n)
-    #file2 = "M1_a2_Xnoise_p03_N"+str(n)
-    # file1 = "M1_a2_Znoise_p03_N"+str(n)
-    # file2 = "M2_a2_Znoise_p03_N"+str(n)
+    #file1 = "M1_a2_N"+str(n)
+    #file2 = "M2_a2_N"+str(n)
+    file1 = "M1_a0_Znoise_p03_N"+str(n)  # cft code
+    file2 = "M1_a2_Znoise_p03_N"+str(n)
+    #file1 = "M1_a2_Xnoise_p03_N"+str(n)
+    #file2 = "M2_a2_Xnoise_p03_N"+str(n)
     #-----------------------------------------#
     if pbc == True:
         print("pbc_optimization, N: ", n)
