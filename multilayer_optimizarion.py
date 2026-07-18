@@ -42,7 +42,7 @@ opti = ctg.ReusableHyperOptimizer(
 
 # 2. Helper Functions
 def read_data(data_name):
-    with h5py.File("save_results/" + data_name + ".h5", "r") as f:
+    with h5py.File("gapless_data/" + data_name + ".h5", "r") as f:
         keys = sorted(f.keys(), key=lambda x: int(x.split("_")[1]))
         data = [np.transpose(f[key][:], (3,2,1,0)) for key in keys]
     return data
@@ -497,26 +497,24 @@ def optimization(file1, file2, model_para, optimize_para, save_name="test"):
 if __name__ == "__main__":
 
     # -------- Parameters ------------------#
-    # n = int(sys.argv[1])  # argument
-    n = 6
-    sample = 1
-    lr = 0.01
-    num_steps =2000
-    # depth = 2*int(sys.argv[2])  # argument
-    depth = 6
+    n = int(sys.argv[1])  # argument
+    sample = 20
+    lr = 0.002
+    num_steps =10000
+    depth = 2*int(sys.argv[2])  # argument
     framework = 'staircase'
     pbc = False
     is_acl = 1
-    is_td = 1  # trace distance
-    info = "test"  # for example, codeX, p03, td, etc
+    is_td = 0  # trace distance
+    info = "codeX_p05"  # for example, codeX, p03, td, etc
 
 
     #file1 = "M1_a2_N"+str(n)
     #file2 = "M2_a2_N"+str(n)
-    file1 = "M1_a0_Znoise_p03_N"+str(n)  # cft code
-    file2 = "M1_a2_Znoise_p03_N"+str(n)
-    #file1 = "M1_a2_Xnoise_p03_N"+str(n)
-    #file2 = "M2_a2_Xnoise_p03_N"+str(n)
+    file1 = "M1_a0_Xnoise_p05_N"+str(n)  # cft code
+    file2 = "M1_a2_Xnoise_p05_N"+str(n)
+    #file1 = "M1_a2_Znoise_p03_N"+str(n)  # fidelity correlator. must be Z noise
+    #file2 = "M2_a2_Znoise_p03_N"+str(n)
     #-----------------------------------------#
     if pbc == True:
         print("pbc_optimization, N: ", n)
