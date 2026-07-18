@@ -26,8 +26,10 @@ class File_access:
             
         if platform == "win32":
             self.current_dir = os.path.join(my_dir,'save_results\\')
+            self.current_dir_old = os.path.join(my_dir,'save_results_old\\')
         elif platform == "linux":
             self.current_dir = os.path.join(my_dir,'save_results/')
+            self.current_dir_old = os.path.join(my_dir,'save_results_old/')
             
         if os.path.exists(self.current_dir)==False: os.makedirs(self.current_dir)
          
@@ -88,6 +90,10 @@ class File_access:
     
     def get_back(self, file_name):  
         with open(self.current_dir+file_name+'.txt','rb') as f:         
+            return pickle.load(f)
+        
+    def get_back_old(self, file_name):  
+        with open(self.current_dir_old+file_name+'.txt','rb') as f:         
             return pickle.load(f)
         
         

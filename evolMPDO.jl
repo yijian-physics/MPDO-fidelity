@@ -383,7 +383,7 @@ apply_TM_l(A::Array{<:Number,4},B::Array{<:Number,4},l::Array{<:Number,2})=ncon(
 apply_TM_r(A::Array{<:Number,4},B::Array{<:Number,4},r::Array{<:Number,2})=ncon([A,conj.(B),r],[[-1,2,3,1],[-2,2,3,4],[1,4]])
 
 apply_TM_l(A::Array{<:Number,3},B::Array{<:Number,3},l::Array{<:Number,2})=ncon([A,conj.(B),l],[[3,2,-2],[1,2,-1],[1,3]])
-
+apply_TM_r(A::Array{<:Number,3},B::Array{<:Number,3},r::Array{<:Number,2})=ncon([A,conj.(B),l],[[-1,2,1],[-2,2,3],[1,3]])
 
 function right_environments(M1::myMPDO,M2::myMPDO)
     ## starting from the right, compute the overlap of <M2|M1> by applying transfer matrices
@@ -403,6 +403,8 @@ function right_environments(M1::myMPDO,M2::myMPDO)
     end
     return rs
 end
+
+
     
 function left_environments(M1::myMPDO,M2::myMPDO)
     ## starting from the left, compute the overlap of <M2|M1> by applying transfer matrices
@@ -474,6 +476,13 @@ end
 function MPDO_norm(M1::myMPDO)
 
     ls = left_environments(M1, M1)
+
+    return ls[end]
+end
+
+function MPS_overlap(M1::myMPS, M2::myMPS)
+
+    ls = left_environments(M1, M2)
 
     return ls[end]
 end
@@ -618,9 +627,28 @@ function compute_trace_distance(rho1,rho2)
 end
 
 
+function fidelity(rho1::myMPDO, rho2::myMPDO; is_td=0)
+    
+    rho1n = MPDO_to_dense(rho1);
+    rho2n = MPDO_to_dense(rho2);
+
+    rho1_dense = rho1n*rho1n'
+    rho2_dense = rho2n*rho2n'
+
+    if is_td == 0
+        F0 = compute_fidelity(rho1_dense, rho2_dense)
+    else
+        F0 = compute_trace_distance(rho1_dense, rho2_dense)
+    end
+
+    return F0
+
+end
+
+
 function fidelity_op(rho::myMPDO,op1::Array,op2::Array,i::Int,j::Int)
 
-    # compute (rho, O1^i O2^j rho O2'^j O1'^i). Here the input rho is LPDO (half of MPDO)
+    # compute fidelity correlator (rho, O1^i O2^j rho O2'^j O1'^i). Here the input rho is LPDO (half of MPDO)
 
     rho_op = add_CP(rho, op1, i)
     rho_op = add_CP(rho_op, op2, j)
