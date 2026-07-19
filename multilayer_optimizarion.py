@@ -354,11 +354,11 @@ def full_contraction(pqc, lpdo_1, lpdo_2):
 def full_contraction_td(pqc, lpdo_1, lpdo_2, is_acl, is_show=0):
     # for trace distance
 
-    if is_show == 1:
-        (lpdo_1_conj & lpdo_1 & pqc).draw(['U','M2','M1'])
-
     lpdo_1_conj = lpdo_1.H
     lpdo_2_conj = lpdo_2.H
+
+    if is_show == 1:
+        (lpdo_1_conj & lpdo_1 & pqc).draw(['U','M2','M1'])
 
     for i in range(n):
         lpdo_1_conj = lpdo_1_conj.reindex({f's{i}':f'sp{i}'})
@@ -506,8 +506,8 @@ if __name__ == "__main__":
     pbc = False
     is_acl = 1
     is_td = 0  # trace distance
-    info = "codeX_p05"  # for example, codeX, p03, td, etc
 
+    info = "xxz/p0.5del0.5/"  # for example, codeX, p03, td, etc
 
     #file1 = "M1_a2_N"+str(n)
     #file2 = "M2_a2_N"+str(n)
@@ -515,6 +515,9 @@ if __name__ == "__main__":
     file2 = "M1_a2_Xnoise_p05_N"+str(n)
     #file1 = "M1_a2_Znoise_p03_N"+str(n)  # fidelity correlator. must be Z noise
     #file2 = "M2_a2_Znoise_p03_N"+str(n)
+
+    file1 = "xxz/p0.5del0.5/M1_a0_XXnoise_p0.5del0.5_N"+str(n)  # xxz fidelity correlator. must be XX noise
+    file2 = "xxz/p0.5del0.5/M1_a2_XXnoise_p0.5del0.5_N"+str(n)
     #-----------------------------------------#
     if pbc == True:
         print("pbc_optimization, N: ", n)

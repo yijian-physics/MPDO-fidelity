@@ -4,6 +4,7 @@ using GLM
 using DataFrames
 using LaTeXStrings
 using HDF5
+using Printf
 
 include("evolMPDO.jl")
 include("IsingED.jl")  # provides MPS_to_array
@@ -38,7 +39,7 @@ function XXZ_GS_DMRG(N, Delta=1.0, pbc=true;max_bd=200,nsweeps = 40)
 end
 
 
-function get_lpdo(N::Int, Delta::Float64=1.0; p1=1.0, divide=2, output=1)
+function xxz_get_lpdo(N::Int, Delta::Float64=1.0; p1=1.0, divide=2, output=1)
     # output is purification tensor (half of LPDO)
 
     psiMPS, E0= XXZ_GS_DMRG(N,Delta,true,nsweeps=60, max_bd=300);
@@ -128,23 +129,69 @@ function benchmark_add_noise_double(N::Int=6, Delta::Float64=1.0; p::Float64=0.2
     return err
 end
 
-#############
+########## direct fidelity calculation for small size #############
+function xxz_fidelity_exact(N::Int, Delta::Float64; p1=1.0)
+
+    # M2 = Sx_i Sx_j applied to M1 at i=1, j=N/2+1 (set inside xxz_get_lpdo)
+    M1, M2 = xxz_get_lpdo(N, Delta; p1=p1, divide=2, output=0)
+    F0 = fidelity_exact(M1[1], M2[1])
+
+    return F0
+end
+
+function fidelity_to_latex(A::Matrix, N_tot, Delta_tot; digits=6)
+    ## Print fidelity_array (size length(N_tot) x length(Delta_tot))
+    ## as a LaTeX table with rows: Delta, columns: N
+    fmt(x) = Printf.format(Printf.Format("%.$(digits)f"), x)
+    ncol = length(N_tot)
+    println("\\begin{tabular}{c|" * "c"^ncol * "}")
+    println("\\hline")
+    println("\$\\Delta\$ & " * join(["\$N = $(N)\$" for N in N_tot], " & ") * " \\\\")
+    println("\\hline")
+    for (j, D) in enumerate(Delta_tot)
+        println("\$$(D)\$ & " * join([fmt(A[i, j]) for i in 1:ncol], " & ") * " \\\\")
+    end
+    println("\\hline")
+    println("\\end{tabular}")
+end
+
+function xxz_run_direct_fidelity(p::Float64, Delta_tot=-1.0:0.1:1.0; N_tot=6:2:10, digits=6)
+    ## Direct (dense) fidelity calculation, small N only; prints a LaTeX table
+    fidelity_array = zeros(Float64, length(N_tot), length(Delta_tot))
+    for (ii, N) in enumerate(N_tot), (jj, Delta) in enumerate(Delta_tot)
+        # println("------ N=$N, Delta=$Delta -------")
+        fidelity_array[ii, jj] = xxz_fidelity_exact(N, Float64(Delta); p1=p)
+    end
+    fidelity_to_latex(fidelity_array, collect(N_tot), collect(Delta_tot); digits=digits)
+    return fidelity_array
+end
+
+####################################
+# julia xxz_init_data.jl 0.5 exact (for direct fidelity)
+# julia xxz_init_data.jl 0.5 0.5 (for generating data files) 
+
 
 if abspath(PROGRAM_FILE) == @__FILE__
     if length(ARGS) < 2
-        println("Usage: julia xxz_init_data.jl <p> <Delta>")
+        println("Usage: julia xxz_init_data.jl <p> <Delta>   # generate data files")
+        println("       julia xxz_init_data.jl <p> exact     # direct (dense) fidelity, Delta scan")
         exit(1)
     end
     p = parse(Float64, ARGS[1])
-    Delta = parse(Float64, ARGS[2])
-    ptag = "p$(p)"         # 0.3 -> "p0.3", 1.0 -> "p1.0"
-    Deltag = "del$(Delta)" # 0.3 -> "del0.3", 1.0 -> "del1.0"
 
-    for N in 6:2:24
-        println("------ N=$N -------")
-        M1_save, M2_save = get_lpdo(N, Delta; p1=p, output=1);
-        output_data(M1_save[1], ptag * Deltag * "/M1_a0_XXnoise_" * ptag * Deltag * "_N" * "$N")
-        output_data(M2_save[1], ptag * Deltag * "/M2_a0_XXnoise_" * ptag * Deltag * "_N" * "$N")
+    if ARGS[2] == "exact"
+        xxz_run_direct_fidelity(p)  # Delta_tot = -1.0:0.1:1.0, N_tot = 6:2:10
+    else
+        Delta = parse(Float64, ARGS[2])
+        ptag = "p$(p)"         # 0.3 -> "p0.3", 1.0 -> "p1.0"
+        Deltag = "del$(Delta)" # 0.3 -> "del0.3", 1.0 -> "del1.0"
+
+        for N in 6:2:24
+            println("------ N=$N -------")
+            M1_save, M2_save = xxz_get_lpdo(N, Delta; p1=p, output=1);
+            output_data(M1_save[1], ptag * Deltag * "/M1_a0_XXnoise_" * ptag * Deltag * "_N" * "$N")
+            output_data(M2_save[1], ptag * Deltag * "/M2_a0_XXnoise_" * ptag * Deltag * "_N" * "$N")
+        end
     end
 
 end
