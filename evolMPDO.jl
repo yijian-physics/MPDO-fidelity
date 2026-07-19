@@ -579,6 +579,86 @@ function add_noise_MPS(M::myMPS{T}, Ws::Vector{Array{T,3}}) where T
     return myMPDO(Ts)
 end
 
+########## Two-site channel implementation ##########
+
+function xx_channel_dilation(p::Float64)
+    ## Bond-factorized dilation of the two-site channel
+    ##     N(rho) = (1-p/2) rho + (p/2) (X⊗X) rho (X⊗X)
+    ## Returns (WL, WR), each with index order (output, ancilla, input, virtual).
+    ## Contracting the virtual legs gives the Kraus isometry
+    ##     sqrt(1-p/2) I⊗I |1> + sqrt(p/2) X⊗X |2>,
+    ## with the Kraus label on WL's ancilla leg (WR's ancilla is trivial).
+    Id = [1.0 0.0; 0.0 1.0]
+    X  = [0.0 1.0; 1.0 0.0]
+
+    WL = zeros(2, 2, 2, 2) # (output, ancilla, input, virtual-R)
+    WL[:, 1, :, 1] = sqrt(1 - p/2) * Id
+    WL[:, 2, :, 2] = sqrt(p/2) * X
+
+    WR = zeros(2, 1, 2, 2) # (output, ancilla, input, virtual-L)
+    WR[:, 1, :, 1] = Id
+    WR[:, 1, :, 2] = X
+
+    return WL, WR
+end
+
+function absorb_W_right(A::Array{<:Number,4}, W::Array{<:Number,4})
+    ## Apply Kraus tensor W (output, ancilla, input, virtual) to the physical
+    ## leg of LPDO tensor A (l, s, a, r); merge W's ancilla leg into A's ancilla
+    ## leg and route W's virtual leg into A's right bond.
+    @tensor B[l, s, a, a2, r, v] := A[l, s0, a, r] * W[s, a2, s0, v]
+    dl, ds, da, da2, dr, dv = size(B)
+    return reshape(B, dl, ds, da*da2, dr*dv)
+end
+
+function absorb_W_left(A::Array{<:Number,4}, W::Array{<:Number,4})
+    ## Same as absorb_W_right, but route W's virtual leg into A's left bond.
+    @tensor B[l, v, s, a, a2, r] := A[l, s0, a, r] * W[s, a2, s0, v]
+    dl, dv, ds, da, da2, dr = size(B)
+    return reshape(B, dl*dv, ds, da*da2, dr)
+end
+
+function insert_bond_wire(A::Array{T,4}, dw::Int) where T<:Number
+    ## Tensor a dw-dimensional identity wire onto both bonds of A, used to
+    ## route the periodic-boundary virtual leg through the bulk.
+    dl, ds, da, dr = size(A)
+    B = zeros(T, dl, dw, ds, da, dr, dw)
+    for k in 1:dw
+        B[:, k, :, :, :, k] = A
+    end
+    return reshape(B, dl*dw, ds, da, dr*dw)
+end
+
+function add_noise_double(M::myMPS{T}, p::Float64) where T
+    ## Apply the two-site channel N(rho) = (1-p/2) rho + (p/2) XX rho XX on
+    ## every bond of the periodic chain: even bonds (1,2),(3,4),..., odd bonds
+    ## (2,3),(4,5),..., and the boundary bond (N,1).
+    ## Input: MPS; output: purification tensor (half of LPDO) as myMPDO.
+    N = length(M)
+    @assert iseven(N) "add_noise_double assumes an even number of sites"
+
+    WL, WR = xx_channel_dilation(p)
+
+    # promote MPS tensors (l,s,r) to LPDO tensors (l,s,a,r) with trivial ancilla
+    Ts = [reshape(A, size(A,1), size(A,2), 1, size(A,3)) for A in M.TensorList]
+
+    # bulk bonds: even layer, then odd layer
+    for start in (1, 2), i in start:2:N-1
+        Ts[i]   = absorb_W_right(Ts[i], WL)
+        Ts[i+1] = absorb_W_left(Ts[i+1], WR)
+    end
+
+    # boundary bond (N,1): virtual leg routed through the bulk
+    Ts[1] = absorb_W_right(Ts[1], WR)
+    for i in 2:N-1
+        Ts[i] = insert_bond_wire(Ts[i], 2)
+    end
+    Ts[N] = absorb_W_left(Ts[N], WL)
+
+    return myMPDO(Ts)
+end
+
+##########################################################
 
 function add_CP(M::myMPDO, Ks::Array,i::Int) 
 

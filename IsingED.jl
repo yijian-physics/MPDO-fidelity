@@ -1,5 +1,13 @@
 using LinearAlgebra,TensorOperations,LinearMaps,Arpack,ITensors, ITensorMPS
 
+
+# Print a diagnostic only when its absolute value exceeds `cutoff`.
+function report_if_large(label, val; cutoff=1e-8)
+    if abs(val) > cutoff
+        println(label, " = ", val)
+    end
+end
+
 function apply_Ising_H(v::AbstractVector,H_local::Matrix)
     D = length(v)
     N = Int(round(log2(D)))
@@ -73,9 +81,9 @@ function dephasing_X(p::Float64)
     return T
 end
 
-function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=200,nsweeps = 20)
+function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=200,nsweeps = 40,weight_fac=50)
     sites = siteinds("S=1/2",N)
-    weight = 50*h
+    weight = weight_fac*h
 
     os = OpSum()
     for j in 1:N-1
@@ -89,19 +97,19 @@ function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=200,nsweeps = 20)
     end
     H = MPO(os,sites)
 
-    
+
     maxdim = [20,32,64,max_bd] # gradually increase states kept
     cutoff = [1E-10] # desired truncation error
     noise = [1E-6,1E-7,1E-8,1E-8,1E-8,0.0]
-    
+
     psi0 = randomMPS(sites,10)
 
     E0,psi0 = dmrg(H,psi0; nsweeps, maxdim, cutoff,noise,outputlevel=0)
     E1, psi1 = dmrg(H, [psi0], randomMPS(sites;linkdims=2); nsweeps, maxdim, cutoff,noise,weight,outputlevel=0)
     E2, psi2 = dmrg(H, [psi0, psi1], randomMPS(sites;linkdims=2); nsweeps, maxdim, cutoff,noise,weight,outputlevel=0)
 
-    # @show inner(psi2,psi0)
-    # @show inner(psi2,psi1)
+    report_if_large("inner(psi2,psi0)", inner(psi2,psi0))
+    report_if_large("inner(psi2,psi1)", inner(psi2,psi1))
 
 
     # M_GS = myMPS(MPS_to_array(psi0));
@@ -110,7 +118,7 @@ function Ising_GS_DMRG(N,h=1.0,pbc=true;max_bd=200,nsweeps = 20)
 
     # println(abs(only(left_environments(M_GS, M_exc2)[end])))
 
-    return psi0, psi1, psi2
+    return psi0, psi1, psi2, E0, E1, E2
 end
 
 
@@ -160,7 +168,7 @@ end
 
 
 function MPS_to_array(psi::MPS)
-    N=length(psi)
+    N = length(psi)
     As=[];
     for i=1:N
         if(i<N)
