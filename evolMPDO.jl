@@ -629,11 +629,15 @@ function insert_bond_wire(A::Array{T,4}, dw::Int) where T<:Number
     return reshape(B, dl*dw, ds, da, dr*dw)
 end
 
-function add_noise_double(M::myMPS{T}, p::Float64) where T
+function add_noise_double(M::myMPS{T}, p::Float64; pbc::Bool = true) where T
     ## Apply the two-site channel N(rho) = (1-p/2) rho + (p/2) XX rho XX on
-    ## every bond of the periodic chain: even bonds (1,2),(3,4),..., odd bonds
-    ## (2,3),(4,5),..., and the boundary bond (N,1).
+    ## every bond of the chain: even bonds (1,2),(3,4),..., odd bonds
+    ## (2,3),(4,5),..., and - for pbc - the boundary bond (N,1).
     ## Input: MPS; output: purification tensor (half of LPDO) as myMPDO.
+    ##
+    ## The boundary bond is the expensive one: its virtual leg has to be routed
+    ## through the whole bulk, which doubles every bond on top of the doubling the
+    ## bulk channels already cause (so D -> 4 D_mps for pbc, 2 D_mps for obc).
     N = length(M)
     @assert iseven(N) "add_noise_double assumes an even number of sites"
 
@@ -648,12 +652,14 @@ function add_noise_double(M::myMPS{T}, p::Float64) where T
         Ts[i+1] = absorb_W_left(Ts[i+1], WR)
     end
 
-    # boundary bond (N,1): virtual leg routed through the bulk
-    Ts[1] = absorb_W_right(Ts[1], WR)
-    for i in 2:N-1
-        Ts[i] = insert_bond_wire(Ts[i], 2)
+    if pbc
+        # boundary bond (N,1): virtual leg routed through the bulk
+        Ts[1] = absorb_W_right(Ts[1], WR)
+        for i in 2:N-1
+            Ts[i] = insert_bond_wire(Ts[i], 2)
+        end
+        Ts[N] = absorb_W_left(Ts[N], WL)
     end
-    Ts[N] = absorb_W_left(Ts[N], WL)
 
     return myMPDO(Ts)
 end
@@ -908,22 +914,77 @@ end
 
 ######### Other fidelity measures #########
 
-function MPDO_to_MPO(M::myMPDO{T}) where T
-    ## Convert MPDO to MPO
-    ## return the MPO in RCF
-    ## contract M with M-dagger
-    N = length(M)
-    MPOSpaces = Array{T,4}[]
-    for i in 1:N
-        A = M.TensorList[i]
-        DL,dS,dA,DR = size(A)
-        @tensor MPOTensor[l1,l2,s1,s2,r1,r2] := A[l1,s1,a,r1] * conj(A)[l2,s2,a,r2]
-        MPOTensor = reshape(MPOTensor, (DL^2, dS, dS, DR^2))
-        push!(MPOSpaces, MPOTensor)
+function truncrank(S::Vector{<:Real}, max_bd::Int, max_err::Float64)
+    ## Number of singular values to keep: drop the smallest tail whose relative
+    ## squared weight is below max_err, capped at max_bd. Same rule as mytruncate
+    ## but for an *un-normalized* S (uses the relative threshold max_err*sum(S^2)).
+    tot = sum(abs2, S)
+    err = 0.0
+    set_bd = min(length(S), max_bd)
+    for i in length(S):-1:1
+        err += S[i]^2
+        if err > max_err*tot
+            if i < max_bd
+                set_bd = i
+            end
+            break
+        end
     end
-    MPO = myMPO(MPOSpaces)
-    MPO = canonicalize_left(MPO,truncation = false)
-    MPO = canonicalize_right(MPO,truncation = true, max_bd = 1024, max_err = 1E-12)
+    return max(set_bd, 1)
+end
+
+function MPDO_to_MPO(M::myMPDO{T}; max_bd::Int = 1024, max_err::Float64 = 1E-12, gram::Bool = true) where T
+    ## Convert the LPDO M to the MPO of rho = M M^dagger, compressing on the fly.
+    ## Zip-up: sweep left to right carrying an already-truncated bond, and build
+    ## each site by contracting that bond with A and conj(A) and immediately
+    ## SVD-truncating. The full DL^2 x DR^2 site tensor is never materialized;
+    ## the largest object is Theta ~ (b*d^2) x (DL_purif^2). Returns a
+    ## right-canonical, truncated MPO (as the previous implementation did).
+    ##
+    ## gram = true: get the left singular vectors from the (b*d^2)^2 Gram matrix
+    ## instead of running a full SVD on the short-and-very-wide matrix. Same
+    ## decomposition, two GEMMs instead of one LAPACK SVD - see below.
+    N = length(M)
+    Ws = Array{T,4}[]
+    C = ones(T, 1, 1, 1)   # [mpo bond b, ket-purif bond, bra-purif bond]
+    for i in 1:N
+        A = M.TensorList[i]   # [l, s, a, r]
+        @tensor Theta[b, s1, s2, rk, rb] := C[b, l, m] * A[l, s1, a, rk] * conj(A)[m, s2, a, rb]
+        b, d1, d2, DRk, DRb = size(Theta)
+        mat = reshape(Theta, (b*d1*d2, DRk*DRb))
+        if gram && size(mat, 1) < size(mat, 2)
+            ## mat is short (m = b*d^2) and very wide (n = DRk*DRb, the *pair* of
+            ## purification bonds). A full SVD of it costs O(m^2 n) and also builds
+            ## the n x m matrix V - by far the most expensive step of the whole
+            ## correlator. All we need is U (-> the MPO tensor) and S*V' = U'*mat
+            ## (-> the bond carried to the next site), so take U from the m x m
+            ## Gram matrix instead:  mat*mat' = U S^2 U'.  Two GEMMs, no big V.
+            ## Note: eigenvalues are S^2, so directions kept at relative weight
+            ## max_err are resolved to ~sqrt(eps/max_err) - fine at max_err 1e-12,
+            ## set gram = false if you ever push max_err below ~1e-14.
+            F = eigen(Hermitian(mat * mat'))          # ascending eigenvalues
+            S = sqrt.(max.(reverse(F.values), 0.0))   # = singular values, descending
+            k = truncrank(S, max_bd, max_err)
+            U = F.vectors[:, end:-1:end-k+1]           # top-k, descending
+            push!(Ws, reshape(U, (b, d1, d2, k)))
+            C = reshape(U' * mat, (k, DRk, DRb))      # = S_k V_k'
+        else
+            U = nothing; S = nothing; V = nothing
+            try
+                U, S, V = svd(mat, alg = LinearAlgebra.DivideAndConquer())
+            catch
+                U, S, V = svd(mat, alg = LinearAlgebra.QRIteration())
+            end
+            k = truncrank(S, max_bd, max_err)
+            U = U[:, 1:k]; S = S[1:k]; V = V[:, 1:k]
+            push!(Ws, reshape(U, (b, d1, d2, k)))
+            C = reshape(diagm(0 => S) * V', (k, DRk, DRb))
+        end
+    end
+    # residual right bond is 1; fold the leftover scalar into the last tensor
+    Ws[end] = Ws[end] .* C[1, 1, 1]
+    MPO = myMPO(Ws)
+    MPO = canonicalize_right(MPO, truncation = true, max_bd = max_bd, max_err = max_err)
     return MPO
 end
 
@@ -951,6 +1012,160 @@ function MPO_product_sqaure_trace(M1::myMPO{T}, M2::myMPO{T}) where T
         l_env = l_env_new
     end
     return l_env[1,1,1,1]
+end
+
+function operator_MPO(ops::Dict, N::Int, T::Type)
+    ## Bond-dimension-1 MPO of a product operator: the given on-site operator at
+    ## each site key in `ops`, identity elsewhere.
+    ## Index order matches myMPO: (left bond, ket, bra, right bond).
+    Idm = Matrix{T}(I, 2, 2)
+    Ts = Array{T,4}[]
+    for i in 1:N
+        o = haskey(ops, i) ? T.(ops[i]) : Idm
+        push!(Ts, reshape(o, (1, 2, 2, 1)))
+    end
+    return myMPO(Ts)
+end
+
+function MPDO_op_rho_op_rho_trace(M::myMPDO, ops::Dict; renorm::Bool = true)
+    ## tr(rho O rho O) for rho = M M^dagger (M the LPDO / purification half) and
+    ## O = prod_k ops[k] a product operator (identity on every site not in `ops`).
+    ## The four layers  A, conj(A), A, conj(A)  are contracted directly, site by
+    ## site: rho is never built as an MPO, so there is no compression and no SVD
+    ## anywhere - the result is exact. `ops` empty  ->  tr(rho^2).
+    ##
+    ## One site (p = left bonds of the four layers, q = right bonds):
+    ##   E'[q1,q2,q3,q4] = E[p1,p2,p3,p4] * A[p1,s1,a,q1] * B[p2,s3,a,q2]
+    ##                                    * A[p3,s3,b,q3] * B[p4,s1,b,q4]
+    ## with B[p,s',a,q] = conj(A)[p,s,a,q]*O[s,s'] the bra layers carrying O, and
+    ## a / b the ancilla index shared by layers 1-2 / 3-4. Layers 1,2 make up the
+    ## first rho and layers 3,4 the second; the two operator insertions sit on the
+    ## (2,3) and (4,1) physical bonds. With O = 1 on every site this reduces to
+    ## tr(rho^2) = tr(rho rho^dagger), i.e. exactly MPO_overlap(rho_mpo, rho_mpo).
+    ##
+    ## Cost / peak memory per site: O(D^5 d^2 dA) / O(D^4 d dA), with D the
+    ## *purification* bond of M. Exact, but only cheap while D stays small: the
+    ## four-layer environment is D^4, whereas the compressed-MPO route only ever
+    ## carries a b^2 environment with b the truncated rho-MPO bond. Prefer this
+    ## when b is not much smaller than D^2 (small systems, exact reference
+    ## values), and MPDO_to_MPO + MPO_product_sqaure_trace when D is large.
+    ##
+    ## Returns (val, logscale): the trace is val*exp(logscale). The environment is
+    ## renormalized at every site so that long chains cannot over/underflow.
+    N = length(M)
+    T = eltype(M.TensorList[1])
+    for (_, O) in ops
+        T = promote_type(T, eltype(O))
+    end
+    E = ones(T, 1, 1, 1, 1)     # [p1, p2, p3, p4] - one left bond per layer
+    logscale = 0.0
+    for n in 1:N
+        A = convert(Array{T,4}, M.TensorList[n])   # [l, s, a, r]
+        if haskey(ops, n)
+            P = convert(Matrix{T}, ops[n])
+            @tensor B[p, so, a, q] := conj(A)[p, si, a, q] * P[si, so]
+        else
+            B = conj(A)
+        end
+        ## absorb one layer at a time, so nothing bigger than ~D^4*d*dA shows up
+        @tensor X[p2, p3, p4, s1, a, q1] := E[p1, p2, p3, p4] * A[p1, s1, a, q1]
+        @tensor Y[p3, p4, s1, q1, s3, q2] := X[p2, p3, p4, s1, a, q1] * B[p2, s3, a, q2]
+        @tensor Z[p4, s1, q1, q2, b, q3] := Y[p3, p4, s1, q1, s3, q2] * A[p3, s3, b, q3]
+        @tensor Enew[q1, q2, q3, q4] := Z[p4, s1, q1, q2, b, q3] * B[p4, s1, b, q4]
+        E = Enew
+        if renorm
+            nrm = norm(E)
+            if nrm > 0
+                E ./= nrm
+                logscale += log(nrm)
+            end
+        end
+    end
+    return E[1, 1, 1, 1], logscale
+end
+
+function renyi2_correlator(M::myMPDO, O1::Array, O2::Array, i::Int, j::Int;
+                           max_bd::Int = 1024, max_err::Float64 = 1E-12,
+                           canonicalize::Bool = true,
+                           lpdo_max_bd::Int = max(max_bond_dim(M), 1),
+                           lpdo_max_err::Float64 = max_err,
+                           method::Symbol = :auto, direct_max_elems::Real = 2^23)
+    ## Renyi-2 correlator  C_{ij} = tr(O_i O_j rho O_i O_j rho) / tr(rho^2),
+    ## with rho = M M^dagger the physical density matrix (M is the LPDO / half).
+    ## Both traces are quadratic in rho, so any overall normalization cancels
+    ## (canonicalize_* normalizes the purification, which is therefore harmless).
+    ##
+    ## canonicalize = true first brings the purification to right-canonical form
+    ## and drops Schmidt weight below lpdo_max_err. Two reasons:
+    ##  (a) the zip-up in MPDO_to_MPO truncates the rho-MPO bond as if the tails to
+    ##      its right were orthonormal - that only holds for right-canonical M, so
+    ##      without this the compression is not variationally controlled;
+    ##  (b) add_noise_double inflates the purification bond by ~4x (channel
+    ##      dilation + boundary wire) and every downstream cost goes like D^2
+    ##      (MPO route) or D^4 (direct route), so this is the cheapest speedup
+    ##      available - it is a 2-layer sweep, not a 4-layer one.
+    ## lpdo_max_err is the knob that does the work (discarded squared Schmidt
+    ## weight per bond; the error in C grows like its square root). lpdo_max_bd is
+    ## only a hard ceiling and defaults to the bond M already has, i.e. no extra
+    ## hard truncation - a bond cap throws away whatever weight sits above it
+    ## regardless of size, so set it only if you need to bound memory. Note it is
+    ## unrelated to max_bd, which caps the *rho-MPO* bond b, a different (and
+    ## normally much smaller) object than the purification bond D.
+    ##
+    ## method = :direct - contract the four layers of M directly
+    ##                    (MPDO_op_rho_op_rho_trace): exact, no rho-MPO and no
+    ##                    SVD, but the environment is D^4 in the purification
+    ##                    bond D, so this is only for small D.
+    ##        = :mpo    - compress rho into an MPO first (MPDO_to_MPO) and
+    ##                    contract MPOs: approximate (max_bd / max_err) but the
+    ##                    environment is only b^2 in the truncated rho-MPO bond b,
+    ##                    which is the affordable route once D is large.
+    ##        = :auto   - :direct while its peak working set stays below
+    ##                    direct_max_elems tensor entries, else :mpo.
+    if canonicalize
+        D0 = max_bond_dim(M)
+        ## Work on a fresh tensor *list* before canonicalizing. canonicalize_* both
+        ## mutate and return the myMPDO they are handed (they assign into
+        ## M.TensorList), so without this the caller's object - e.g. M1[1] from
+        ## xxz_get_lpdo - would come back canonicalized and truncated. Rebinding M
+        ## below cannot prevent that: it only renames this function's local, the
+        ## caller still holds the original object.
+        ## A shallow copy is enough (and avoids duplicating all the data): the
+        ## canonicalizers *replace* list entries with freshly allocated tensors and
+        ## never write into an existing one, so the shared arrays are never touched.
+        M = myMPDO(copy(M.TensorList))
+        ## Sweep left first (no truncation) so that everything to the left of the
+        ## bond is left-canonical; only then does the right sweep see the true
+        ## Schmidt values and truncate optimally.
+        M = canonicalize_left(M)
+        M = canonicalize_right(M; truncation = true, max_bd = lpdo_max_bd,
+                                  max_err = lpdo_max_err)
+        println(" --- LPDO right-canonicalized: bond $(D0) -> $(max_bond_dim(M)) ---")
+    end
+    if method == :auto
+        peak = float(max_bond_dim(M))^4 * phys_dim(M) * ancilla_dim(M)
+        method = peak <= direct_max_elems ? :direct : :mpo
+    end
+    if method == :direct
+        ops = Dict{Int,Array}(i => O1, j => O2)
+        num, lnum = MPDO_op_rho_op_rho_trace(M, ops)                 # tr(rho A rho A)
+        println(" --- num done (direct four-layer) ---")
+        den, lden = MPDO_op_rho_op_rho_trace(M, Dict{Int,Array}())   # tr(rho^2)
+        println(" --- den done (direct four-layer) ---")
+        return real((num / den) * exp(lnum - lden))
+    elseif method == :mpo
+        rho_mpo = MPDO_to_MPO(M; max_bd = max_bd, max_err = max_err)
+        println(" --- rho_mpo done (bond $(max_bond_dim(rho_mpo))) ---")
+        T = eltype(rho_mpo.TensorList[1])
+        A_mpo = operator_MPO(Dict(i => O1, j => O2), length(M), T)
+        num = MPO_product_sqaure_trace(rho_mpo, A_mpo)  # tr(rho A rho A)
+        println(" --- num done ---")
+        den = MPO_overlap(rho_mpo, rho_mpo)             # tr(rho^2)
+        println(" --- den done ---")
+        return real(num / den)
+    else
+        error("renyi2_correlator: unknown method $(method) - use :auto, :direct or :mpo")
+    end
 end
 
 function trMPO(M::myMPO{T}) where T
