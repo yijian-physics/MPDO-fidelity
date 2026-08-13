@@ -68,7 +68,8 @@ end
 
 
 function xxz_get_lpdo(N::Int, Delta::Float64=1.0; p1=1.0, divide=2, output=1,
-                      dmrg_max_bd=256, dmrg_nsweeps=24, with_M2=true, pbc=true)
+                      dmrg_max_bd=256, dmrg_nsweeps=24, with_M2=true, pbc=true,
+                      lpdo_max_err=0.0, lpdo_max_bd=4096)
     # output is purification tensor (half of LPDO)
 
     psiMPS, E0 = XXZ_GS_DMRG(N, Delta, pbc; nsweeps=dmrg_nsweeps, max_bd=dmrg_max_bd)
@@ -78,6 +79,13 @@ function xxz_get_lpdo(N::Int, Delta::Float64=1.0; p1=1.0, divide=2, output=1,
     i, j = 1, Int(N/divide)+1  # fix the ratio to be 1/divide
 
     M1 = add_noise_double(A, p1; pbc=pbc)
+    ## Optionally truncate the purification bond (lpdo_max_err = 0 -> exact, as
+    ## before). Do it BEFORE building M2, so that M2 = X_i X_j M1 inherits exactly
+    ## the same tensors and gauge: compressing the two independently would truncate
+    ## them in different bases and corrupt the fidelity between them.
+    if lpdo_max_err > 0
+        M1 = compress_lpdo(M1; max_bd=lpdo_max_bd, max_err=lpdo_max_err, verbose=true)
+    end
     ## M2 is only used by the fidelity route; building it copies the whole LPDO,
     ## which is the largest object around, so skip it when only M1 is wanted.
     M2 = with_M2 ? add_CP(add_CP(M1, Sx, i), Sx, j) : nothing
@@ -221,7 +229,15 @@ function xxz_renyi2_exact(N::Int, Delta::Float64; p1=1.0, max_bd=384, max_err=1E
     verbose && println(" --- lpdo done ($(round(time()-t0,digits=1)) s, bond $(max_bond_dim(M1[1]))) ---")
     Sx = [0 1; 1 0]
     ## PBC is translation invariant, so sites 1 and N/2+1 are the paper's L/4 and
-    ## 3L/4. Without translation invariance we have to use those sites literally.
+    ## 3L/4. Without translation invariance we have to use those sites literally -
+    ## which only lands on L/4 and 3L/4, i.e. separation exactly L/2, when 4 | N.
+    ## For N = 18 it would give sites (4,12), separation 8 instead of 9, and that
+    ## single short point is enough to throw off an exponent fit.
+    if !pbc && N % 4 != 0
+        error("xxz_renyi2_exact: pbc=false needs N divisible by 4 so that the " *
+              "operators sit at L/4 and 3L/4 (got N=$N, which would give sites " *
+              "$(div(N,4)) and $(3*div(N,4)), separation $(2*div(N,4)) instead of $(div(N,2)))")
+    end
     i, j = pbc ? (1, Int(N/2) + 1) : (div(N, 4), 3*div(N, 4))
     C = renyi2_correlator(M1[1], Sx, Sx, i, j; max_bd=max_bd, max_err=max_err,
                           lpdo_max_err=lpdo_max_err, lpdo_max_bd=4096, method=:mpo)
@@ -245,15 +261,22 @@ function fidelity_to_latex(A::Matrix, N_tot, Delta_tot; digits=6)
     println("\\end{tabular}")
 end
 
-function xxz_run_direct_fidelity(p::Float64, Delta_tot=-1.0:0.1:1.0; N_tot=6:2:10, digits=6)
-    ## Direct (dense) fidelity calculation, small N only; prints a LaTeX table
-    fidelity_array = zeros(Float64, length(N_tot), length(Delta_tot))
+function xxz_run_direct_fidelity(p::Float64, Delta_tot=-1.0:0.1:1.0; N_tot=6:2:10, digits=6,
+                                 name="fidelity_p$(p)")
+    ## Direct (dense) fidelity calculation, small N only; prints a LaTeX table.
+    ## Cost is set by the two 2^N x 2^N matrix square roots in compute_fidelity,
+    ## so N = 12 is comfortable and N = 14 is roughly an hour per Delta.
+    ## Written out after every point so a long scan can be interrupted.
+    fidelity_array = fill(NaN, length(N_tot), length(Delta_tot))
+    t_start = time()
     for (ii, N) in enumerate(N_tot), (jj, Delta) in enumerate(Delta_tot)
-        # println("------ N=$N, Delta=$Delta -------")
         fidelity_array[ii, jj] = xxz_fidelity_exact(N, Float64(Delta); p1=p)
+        println("N=$N Delta=$Delta -> F=$(fidelity_array[ii, jj])  (elapsed $(round(time()-t_start,digits=1)) s)")
+        flush(stdout)
+        save_array_json(fidelity_array, N_tot, Delta_tot, p; name=name)
     end
     fidelity_to_latex(fidelity_array, collect(N_tot), collect(Delta_tot); digits=digits)
-    save_array_json(fidelity_array, N_tot, Delta_tot, p; name="fidelity_p$(p)")
+    println("total wall time: $(round(time()-t_start,digits=1)) s")
     return fidelity_array
 end
 
@@ -284,7 +307,7 @@ end
 
 ####################################
 # julia xxz_init_data.jl 0.2 exact (for direct fidelity)
-# julia xxz_init_data.jl 0.5 0.5 (for generating data files) 
+# julia xxz_init_data.jl 0.2 16 (for generating data files) p = 0.2 
 # julia xxz_init_data.jl 0.2 renyi2 (for Renyi-2 correlator)
 
 
@@ -303,15 +326,24 @@ if abspath(PROGRAM_FILE) == @__FILE__
         BLAS.set_num_threads(Sys.CPU_THREADS)
         xxz_run_direct_renyi2(p, -0.3:0.075:0.3; N_tot=[18, 24, 32, 48])
     else
-        Delta = parse(Float64, ARGS[2])
+        N = parse(Int, ARGS[2])
         ptag = "p$(p)"         # 0.3 -> "p0.3", 1.0 -> "p1.0"
-        Deltag = "del$(Delta)" # 0.3 -> "del0.3", 1.0 -> "del1.0"
+        Ntag = "N$(N)"         # 6 -> "N6", 24 -> "N24"
 
-        for N in 6:2:24
-            println("------ N=$N -------")
-            M1_save, M2_save = xxz_get_lpdo(N, Delta; p1=p, output=1);
-            output_data(M1_save[1], ptag * Deltag * "/M1_a0_XXnoise_" * ptag * Deltag * "_N" * "$N")
-            output_data(M2_save[1], ptag * Deltag * "/M2_a0_XXnoise_" * ptag * Deltag * "_N" * "$N")
+        ## Truncate the purification bond before writing. add_noise_double leaves it
+        ## at 4x the DMRG bond and most of that is redundant: at 1e-8 discarded
+        ## squared Schmidt weight the bond drops 3-4x (N=16: 388 -> 114) while the
+        ## fidelity moves by <5e-7, i.e. below the DMRG random-init noise floor.
+        ## Compression happens inside xxz_get_lpdo BEFORE M2 = X_i X_j M1 is formed,
+        ## so both halves keep the same tensors and gauge.
+        lpdo_max_err = 1E-8
+
+        for Delta in -1.0:0.1:1.0
+            println("------ N=$N, Delta=$Delta -------")
+            M1_save, M2_save = xxz_get_lpdo(N, Delta; p1=p, output=1,
+                                            lpdo_max_err=lpdo_max_err);
+            output_data(M1_save[1], ptag * Ntag * "/M1_a0_XXnoise_" * ptag * Ntag * "_Delta" * "$Delta")
+            output_data(M2_save[1], ptag * Ntag * "/M2_a0_XXnoise_" * ptag * Ntag * "_Delta" * "$Delta")
         end
     end
 

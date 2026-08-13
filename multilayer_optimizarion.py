@@ -494,37 +494,47 @@ def optimization(file1, file2, model_para, optimize_para, save_name="test"):
 
 
 # 5. PROTECTED MAIN BLOCK
+# python multilayer_optimizarion.py $P1 $P2
 if __name__ == "__main__":
 
     # -------- Parameters ------------------#
+    # usage: python multilayer_optimizarion.py <N> <depth/2> [Delta]
+    # Delta is optional and defaults to 0.5, so the previous two-argument call
+    # still behaves exactly as before.
     n = int(sys.argv[1])  # argument
     sample = 20
     lr = 0.002
     num_steps =10000
     depth = 2*int(sys.argv[2])  # argument
+    Delta = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5  # optional argument
     framework = 'staircase'
     pbc = False
     is_acl = 1
     is_td = 0  # trace distance
 
-    info = "xxz/p0.5del0.5/"  # for example, codeX, p03, td, etc
+    # str(float(...)) reproduces the tag Julia writes with "$Delta": both give
+    # "0.5", "-0.3", "1.0", ... for the values on the -1.0:0.1:1.0 grid.
+    dtag = "Delta"+str(Delta)
+    info = "xxz/p0.2N"+str(n)+"/"  # for example, codeX, p03, td, etc
 
     #file1 = "M1_a2_N"+str(n)
     #file2 = "M2_a2_N"+str(n)
-    file1 = "M1_a0_Xnoise_p05_N"+str(n)  # cft code
-    file2 = "M1_a2_Xnoise_p05_N"+str(n)
+    # file1 = "M1_a0_Xnoise_p0.2_N"+str(n)  # cft code
+    # file2 = "M1_a2_Xnoise_p0.2_N"+str(n)
     #file1 = "M1_a2_Znoise_p03_N"+str(n)  # fidelity correlator. must be Z noise
     #file2 = "M2_a2_Znoise_p03_N"+str(n)
 
-    file1 = "xxz/p0.5del0.5/M1_a0_XXnoise_p0.5del0.5_N"+str(n)  # xxz fidelity correlator. must be XX noise
-    file2 = "xxz/p0.5del0.5/M1_a2_XXnoise_p0.5del0.5_N"+str(n)
+    # xxz fidelity correlator. must be XX noise.
+    # xxz_init_data.jl writes the pair as M1_a0_... / M2_a0_... in the same folder.
+    file1 = info+"M1_a0_XXnoise_p0.2N"+str(n)+"_"+dtag
+    file2 = info+"M2_a0_XXnoise_p0.2N"+str(n)+"_"+dtag
     #-----------------------------------------#
     if pbc == True:
-        print("pbc_optimization, N: ", n)
-        save_name = info+"pbcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
+        print("pbc_optimization, N: ", n, " Delta: ", Delta)
+        save_name = info+"pbcN"+str(n)+dtag+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
     elif pbc == False:
-        print("obc_optimization, N: ", n)
-        save_name = info+"obcN"+str(n)+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
+        print("obc_optimization, N: ", n, " Delta: ", Delta)
+        save_name = info+"obcN"+str(n)+dtag+"lr"+str(lr)+"num_steps"+str(num_steps)+"sample"+str(sample)+framework+"depth"+str(depth)
 
     model_para = ModelPara(framework, depth, pbc, is_acl, is_td)
     optimize_para = OptimizePara(lr, num_steps, sample)
