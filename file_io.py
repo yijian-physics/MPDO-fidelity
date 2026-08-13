@@ -42,9 +42,15 @@ class File_access:
                                    '(press <ENTER> for not to save)')
                        
         if file_name!="":
-            with open(self.current_dir+file_name+'.txt', 'wb') as f: 
+            # file_name may contain sub-directories (e.g. "xxz/p0.2N16/obcN16...");
+            # __init__ only creates save_results itself, so make the rest here or
+            # open() fails with FileNotFoundError at the end of the first sample.
+            out_path = self.current_dir+file_name+'.txt'
+            parent = os.path.dirname(out_path)
+            if parent and not os.path.exists(parent): os.makedirs(parent)
+            with open(out_path, 'wb') as f:
                 pickle.dump(result_data, f)
-            
+
         self.save_dir = self.current_dir+file_name+'.txt'
 
                 

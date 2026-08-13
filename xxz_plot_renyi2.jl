@@ -25,7 +25,9 @@ function read_array_json(path::AbstractString)
 end
 
 function plot_renyi2(name="renyi2_p0.2"; folder="save_results/xxz", outdir="figures",
-                     eta=0.66)
+                     eta=0.66, ysym=raw"C_X^{\mathrm{II}}(L/4,3L/4)", ttl=nothing)
+    ## Works for any observable saved in this format - pass ysym/eta to plot the
+    ## Uhlmann fidelity scan instead of the Renyi-2 correlator.
     A, N_tot, Delta_tot, p = read_array_json(joinpath(folder, name * ".json"))
     mkpath(outdir)
 
@@ -35,14 +37,17 @@ function plot_renyi2(name="renyi2_p0.2"; folder="save_results/xxz", outdir="figu
     ## at a single point IS the transition. (0.66 is the exponent at this p only -
     ## along the critical line it decreases with increasing decoherence.)
     marks = [:circle, :square, :utriangle, :diamond, :star5, :hexagon]
-    ylab = L"L^{%$(eta)}\, C_X^{\mathrm{II}}(L/4,3L/4)"
-    mkplot(xlab, ttl) = plot(xlabel = xlab, ylabel = ylab, title = ttl,
-                             legend = :topleft, framestyle = :box, size = (620, 470),
-                             titlefontsize = 10, guidefontsize = 11, legendfontsize = 9)
+    ## build the label as one LaTeX string - interpolating a LaTeXString into
+    ## another with %$() leaves the escapes unrendered
+    ylab = eta == 0 ? latexstring(ysym) : latexstring("L^{$(eta)}\\, $(ysym)")
+    mkplot(xlab, t) = plot(xlabel = xlab, ylabel = ylab, title = t,
+                           legend = :topleft, framestyle = :box, size = (620, 470),
+                           titlefontsize = 10, guidefontsize = 11, legendfontsize = 9)
 
     bc = occursin("obc", lowercase(name)) ? "OBC" : "PBC"
-    plt = mkplot(L"\Delta", "XXZ under XX decoherence, p = $(p/2), $bc")
-    plt2 = mkplot(L"\Delta \log L", "data collapse (boundary BKT), p = $(p/2), $bc")
+    base = ttl === nothing ? "XXZ under XX decoherence, p = $(p/2), $bc" : ttl
+    plt = mkplot(L"\Delta", base)
+    plt2 = mkplot(L"\Delta \log L", base * " -- collapse")
     for (ii, N) in enumerate(N_tot)
         y = A[ii, :] .* N^eta
         keep = .!isnan.(y)

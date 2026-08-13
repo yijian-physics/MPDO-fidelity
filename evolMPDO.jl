@@ -664,9 +664,37 @@ function add_noise_double(M::myMPS{T}, p::Float64; pbc::Bool = true) where T
     return myMPDO(Ts)
 end
 
+function compress_lpdo(M::myMPDO; max_bd::Int = 4096, max_err::Float64 = 1E-8,
+                       verbose::Bool = false)
+    ## Variationally truncate the purification bond of an LPDO.
+    ##
+    ## add_noise_double is exact and leaves the bond at 4x the input MPS bond (the
+    ## channel dilation doubles it, and routing the periodic bond's virtual leg
+    ## through the bulk doubles it again). Most of that is redundant: a proper
+    ## canonicalize-and-truncate typically removes a factor of 3-4 while discarding
+    ## squared Schmidt weight below max_err.
+    ##
+    ## Sweep left first without truncating, so that everything to the left of a bond
+    ## is left-canonical and the right sweep sees the true Schmidt values - only then
+    ## is the truncation variationally optimal.
+    ##
+    ## Note this is a truncation of the purification, so the discarded weight bounds
+    ## the error in |M> and hence (to first order) the error in rho = M M^dagger.
+    ## The canonicalizers also normalize, i.e. the result has tr(rho) = 1; the input
+    ## from add_noise_double already does, so that is a no-op up to the truncation.
+    D0 = max_bond_dim(M)
+    ## Work on a fresh tensor list: canonicalize_* assign into the myMPDO they are
+    ## given, so without this the caller's object would come back truncated.
+    M = myMPDO(copy(M.TensorList))
+    M = canonicalize_left(M)
+    M = canonicalize_right(M; truncation = true, max_bd = max_bd, max_err = max_err)
+    verbose && println(" --- LPDO compressed: bond $(D0) -> $(max_bond_dim(M)) ---")
+    return M
+end
+
 ##########################################################
 
-function add_CP(M::myMPDO, Ks::Array,i::Int) 
+function add_CP(M::myMPDO, Ks::Array,i::Int)
 
     M_new = copy(M)
     tmp = copy(M.TensorList[i])

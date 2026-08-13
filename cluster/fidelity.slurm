@@ -13,4 +13,5 @@ module purge
 module load anaconda/3/2023.03
 source activate quimb_env
 
-python multilayer_optimizarion.py $P1 $P2
+# $P1 = N, $P2 = floor, $P3 = Delta (optional; the script defaults to 0.5)
+python multilayer_optimizarion.py $P1 $P2 $P3
